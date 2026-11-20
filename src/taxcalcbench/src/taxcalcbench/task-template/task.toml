@@ -2,7 +2,7 @@ version = "1.0"
 artifacts = [{ source = "/app/output" }]
 
 [task]
-name = "taxcalcbench/{task_id}"
+name = "column-tax/taxcalcbench__{task_id}"
 description = "TaxCalcBench: read a taxpayer's documents and compute the {form_name}; graded line by line against the expected return."
 authors = [{ name = "Michael R. Bock" }, { name = "Kara Molisee" }, { name = "Zachary Ozer" }, { name = "Sumit Shah" }]
 keywords = ["taxcalcbench", "tax", "finance", "document-understanding", "calculation"]

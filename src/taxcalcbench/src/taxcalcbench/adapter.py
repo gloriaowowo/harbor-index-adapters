@@ -72,13 +72,17 @@ class TaxCalcBenchAdapter:
         limit: int | None = None,
         overwrite: bool = False,
         tax_years: tuple[str, ...] = TAX_YEARS,
+        split: str = "full",
     ) -> None:
+        if split not in ("full", "parity"):
+            raise ValueError(f"Unknown split: {split}")
         self.output_dir = Path(output_dir)
         self.benchmark_root = Path(benchmark_root).resolve()
         self.task_ids = task_ids
         self.limit = limit
         self.overwrite = overwrite
         self.tax_years = tax_years
+        self.split = split
         self._upstream = _load_upstream(self.benchmark_root)
 
     # ------------------------------------------------------------------ cases
@@ -89,6 +93,8 @@ class TaxCalcBenchAdapter:
             for case_dir in sorted(p for p in data_dir.iterdir() if p.is_dir()):
                 if (case_dir / "output.xml").exists():
                     cases.append(SourceCase(tax_year, case_dir.name, case_dir))
+        if self.split == "parity":
+            cases = parity_subset(cases)
         if self.task_ids:
             wanted = set(self.task_ids)
             known = {c.task_id for c in cases} | {c.source_id for c in cases}
@@ -131,7 +137,7 @@ class TaxCalcBenchAdapter:
         # Instruction = upstream prompt + Harbor task notes.
         prompt = self._upstream_prompt(case)
         notes = _harbor_notes(case, [p.name for p in input_files])
-        (task_dir / "instruction.md").write_text(f"{prompt.rstrip()}\n\n{notes}")
+        (task_dir / "instruction.md").write_text(f"{prompt}\n{notes}")
 
         # Verifier data.
         fields = self._scored_fields(case)
@@ -190,6 +196,32 @@ class TaxCalcBenchAdapter:
 
 
 # ---------------------------------------------------------------------- helpers
+PARITY_SEED = 42
+PARITY_TY25_PER_JURISDICTION = 2
+PARITY_TY24 = 10
+
+
+def parity_subset(cases: list[SourceCase]) -> list[SourceCase]:
+    """Fixed 20-case parity subset.
+
+    Two TY25 cases per jurisdiction (us, ca, il, ny, va) and ten TY24 cases,
+    each drawn with ``random.Random(42)`` from the sorted case names, so the
+    subset is the same on every run and on both parity sides.
+    """
+    import random
+
+    rng = random.Random(PARITY_SEED)
+    picked: list[SourceCase] = []
+    ty25 = sorted((c for c in cases if c.tax_year == TY25), key=lambda c: c.source_id)
+    for jurisdiction in ("us", "ca", "il", "ny", "va"):
+        pool = [c for c in ty25 if c.source_id.split("-")[1] == jurisdiction]
+        picked += rng.sample(pool, min(PARITY_TY25_PER_JURISDICTION, len(pool)))
+    ty24 = sorted((c for c in cases if c.tax_year == TY24), key=lambda c: c.source_id)
+    picked += rng.sample(ty24, min(PARITY_TY24, len(ty24)))
+    order = {id(c): i for i, c in enumerate(cases)}
+    return sorted(picked, key=lambda c: order[id(c)])
+
+
 def _load_upstream(root: Path) -> dict:
     """Import the prompt and scoring definitions from the upstream checkout."""
     if not (root / "tax_calc_bench").is_dir():

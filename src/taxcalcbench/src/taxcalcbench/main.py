@@ -41,6 +41,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--ref", default=TAXCALCBENCH_REF, help="Git ref to clone.")
     p.add_argument("--tax-year", choices=[*TAX_YEARS, "all"], default="all",
                    help="ty25 (50 PDF cases), ty24 (51 JSON cases) or all (default).")
+    p.add_argument("--split", choices=["full", "parity"], default="full",
+                   help="full (default) or parity: the fixed 20-case parity subset.")
     p.add_argument("--task-ids", nargs="*", default=None,
                    help="Task ids (e.g. ty25-ca-001) or upstream case names.")
     p.add_argument("--limit", type=int, default=None, help="Generate only the first N tasks.")
@@ -57,6 +59,7 @@ def _generate(args: argparse.Namespace, root: Path) -> None:
         limit=args.limit,
         overwrite=args.overwrite,
         tax_years=years,
+        split=args.split,
     )
     written = adapter.run()
     logger.info(f"Generated {len(written)} task(s) under {args.output_dir}")

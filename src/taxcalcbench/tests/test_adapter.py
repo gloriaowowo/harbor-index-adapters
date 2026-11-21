@@ -74,7 +74,7 @@ def test_instruction_starts_with_upstream_prompt(generated):
     for case in adapter.discover():
         prompt = adapter._upstream_prompt(case)
         instruction = (out / case.task_id / "instruction.md").read_text()
-        assert instruction.startswith(prompt.rstrip()), case.task_id
+        assert instruction.startswith(prompt), case.task_id
 
 
 def test_scorer_matches_upstream(generated, upstream_evaluator):
@@ -87,7 +87,8 @@ def test_scorer_matches_upstream(generated, upstream_evaluator):
         oracle = (task_dir / "solution/oracle_return.txt").read_text()
         jurisdiction = case.source_id.split("-")[1] if case.tax_year == TY25 else None
 
-        for name, answer in [("oracle", oracle), ("empty", ""), ("off_by_one", _off_by_one(oracle))]:
+        answers = [("oracle", oracle), ("empty", ""), ("off_by_one", _off_by_one(oracle)), ("duplicate", oracle + oracle)]
+        for name, answer in answers:
             mine = scorer.evaluate(answer, expected_xml, spec["tax_year"], spec["fields"])
             theirs = upstream_evaluator.evaluate(
                 answer, expected_xml, tax_year=case.tax_year, jurisdiction=jurisdiction
@@ -100,5 +101,10 @@ def test_scorer_matches_upstream(generated, upstream_evaluator):
             ), (case.task_id, name)
             if name == "oracle":
                 assert mine["strictly_correct_return"], case.task_id
+            elif name == "duplicate":
+                # Upstream TY25 parsing ignores a label that appears more than once;
+                # TY24 parsing takes the first occurrence. Matching upstream is what counts.
+                if case.tax_year == TY25:
+                    assert not mine["strictly_correct_return"], (case.task_id, name)
             else:
                 assert not mine["strictly_correct_return"], (case.task_id, name)

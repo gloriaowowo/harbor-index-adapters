@@ -53,12 +53,16 @@ def _harbor_run(job_dir: Path, cases: list[str]) -> dict[str, dict]:
         score = trial / "verifier" / "score.json"
         if task_id not in cases or not score.is_file() or result.get("exception_info"):
             continue
+        if task_id in out:
+            raise SystemExit(f"{job_dir}: more than one scored trial for {task_id}; one trial per task per run")
         s = json.loads(score.read_text())
         out[task_id] = {"strict": bool(s["strictly_correct_return"]), "by_line": 100 * s["correct_by_line_score"]}
     return out
 
 
 def _summ(runs: list[dict[str, dict]]) -> dict:
+    if not runs:
+        raise SystemExit("no runs found")
     strict = [100 * sum(r["strict"] for r in run.values()) / len(run) if run else float("nan") for run in runs]
     by_line = [sum(r["by_line"] for r in run.values()) / len(run) if run else float("nan") for run in runs]
     return {"strict_runs": strict, "by_line_runs": by_line, "n_scored": [len(r) for r in runs],
@@ -98,8 +102,22 @@ def main() -> None:
         print(f"{name:9s} strict {fmt(sm, se)}  by-line {fmt(bm, be)}  "
               f"runs strict={[round(x, 2) for x in s['strict_runs']]} by-line={[round(x, 2) for x in s['by_line_runs']]} "
               f"scored={s['n_scored']}/{len(cases)}")
+    for name, runs in (("original", orig_runs), ("harbor", harb_runs)):
+        for i, run in enumerate(runs, 1):
+            missing = [t for t in cases if t not in run]
+            if missing:
+                print(f"  {name} run {i}: not scored ({len(missing)}): {', '.join(missing)}")
+    problems = []
+    if len(orig_runs) < 2 or len(harb_runs) < 2:
+        problems.append("fewer than 2 runs on a side")
+    if len(orig_runs) != len(harb_runs):
+        problems.append(f"unequal run counts ({len(orig_runs)} vs {len(harb_runs)})")
+    if any(len(r) != len(cases) for r in orig_runs + harb_runs):
+        problems.append("some runs did not score every case")
     print("overlap strict:", _overlap(o["strict_runs"], h["strict_runs"]),
           " overlap by-line:", _overlap(o["by_line_runs"], h["by_line_runs"]))
+    if problems:
+        print("NOT an acceptance report:", "; ".join(problems))
 
     per_task = {t: {"original": [r[t]["strict"] if t in r else None for r in orig_runs],
                     "harbor": [r[t]["strict"] if t in r else None for r in harb_runs]} for t in cases}

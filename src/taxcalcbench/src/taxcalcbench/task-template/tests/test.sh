@@ -3,6 +3,10 @@
 # TaxCalcBench rules (tests/score.py). Reward = 1 for a strictly correct return
 # (every scored line exact), else 0. Per-line results go to
 # /logs/verifier/score.json.
+#
+# A missing or wrong answer is a valid score of 0 and is written by score.py.
+# If score.py itself fails (crash, missing data), no reward is written and the
+# script exits non-zero, so Harbor records a verifier error instead of a 0.
 mkdir -p /logs/verifier
 rm -f /logs/verifier/reward.txt /logs/verifier/score.json
 
@@ -12,6 +16,11 @@ rm -f /logs/verifier/reward.txt /logs/verifier/score.json
   --fields /tests/scored_fields.json \
   --report /logs/verifier/score.json \
   --reward /logs/verifier/reward.txt
+status=$?
 
-test -f /logs/verifier/reward.txt || echo 0 > /logs/verifier/reward.txt
+if [ "$status" -ne 0 ] || [ ! -f /logs/verifier/reward.txt ]; then
+  echo "score.py failed (exit $status); no reward written" >&2
+  rm -f /logs/verifier/reward.txt
+  exit 1
+fi
 exit 0

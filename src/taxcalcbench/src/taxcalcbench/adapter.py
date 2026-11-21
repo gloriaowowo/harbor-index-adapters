@@ -115,7 +115,18 @@ class TaxCalcBenchAdapter:
                     logger.info(f"Skipping existing task {case.task_id}")
                     continue
                 shutil.rmtree(task_dir)
-            self._write_task(case, task_dir)
+            # Build in a staging folder and move it into place only when the
+            # task is complete, so a failed run never leaves a partial task.
+            staging = self.output_dir / f".staging-{case.task_id}"
+            if staging.exists():
+                shutil.rmtree(staging)
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                self._write_task(case, staging)
+                staging.rename(task_dir)
+            finally:
+                if staging.exists():
+                    shutil.rmtree(staging)
             written.append(task_dir)
         return written
 
@@ -173,10 +184,11 @@ class TaxCalcBenchAdapter:
                 [p.name for p in pdfs],
                 case.source_id,
             )
-        # Upstream formats the parsed JSON object (its Python repr) into the
-        # TY24 template with an empty tool_use_hint when web search is off.
+        # Upstream (run_tax_return_test) loads input.json and passes
+        # json.dumps(...) of it into the TY24 template, with an empty
+        # tool_use_hint when web search is off.
         with open(case.case_dir / "input.json") as f:
-            input_data = json.load(f)
+            input_data = json.dumps(json.load(f))
         return up["TAX_RETURN_GENERATION_PROMPT"].format(
             tax_year=up["TAX_YEAR"], tool_use_hint="", input_data=input_data
         )

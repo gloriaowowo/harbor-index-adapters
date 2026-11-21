@@ -3,7 +3,7 @@
 # collected /app/output artifact. Grading code and data are baked in here.
 FROM python:3.13-slim
 
-RUN pip install --no-cache-dir lxml==6.0.2
+RUN pip install --no-cache-dir lxml==6.1.0
 
 COPY . /tests/
 RUN chmod +x /tests/test.sh && rm -f /tests/Dockerfile

@@ -39,6 +39,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--taxcalcbench-root", type=Path, default=None,
                    help="Existing tax-calc-bench checkout (default: clone the pinned ref).")
     p.add_argument("--ref", default=TAXCALCBENCH_REF, help="Git ref to clone.")
+    p.add_argument("--allow-other-ref", action="store_true",
+                   help="Allow --taxcalcbench-root at a commit other than the pinned one.")
     p.add_argument("--tax-year", choices=[*TAX_YEARS, "all"], default="all",
                    help="ty25 (50 PDF cases), ty24 (51 JSON cases) or all (default).")
     p.add_argument("--split", choices=["full", "parity"], default="full",
@@ -69,6 +71,15 @@ def main() -> None:
     args = _parse_args()
     try:
         if args.taxcalcbench_root is not None:
+            head = subprocess.run(
+                ["git", "-C", str(args.taxcalcbench_root), "rev-parse", "HEAD"],
+                capture_output=True, text=True,
+            ).stdout.strip()
+            if head != TAXCALCBENCH_REF and not args.allow_other_ref:
+                raise RuntimeError(
+                    f"--taxcalcbench-root is at {head or 'an unknown revision'}, expected "
+                    f"{TAXCALCBENCH_REF}; check out the pinned commit or pass --allow-other-ref"
+                )
             _generate(args, args.taxcalcbench_root)
         else:
             with tempfile.TemporaryDirectory() as tmp:

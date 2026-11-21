@@ -48,32 +48,40 @@ def agent(tmp_path_factory):
     return TaxCalcBenchDirectAgent(logs_dir=tmp_path_factory.mktemp("logs"), model_name=MODEL)
 
 
+def _upstream_request(gen, case, monkeypatch) -> dict:
+    """Run upstream's real per-test path and capture the request it would send."""
+    captured: list[dict] = []
+
+    class _Stop(BaseException):
+        pass
+
+    def fake_responses(**kwargs):
+        captured.append(kwargs)
+        raise _Stop()
+
+    monkeypatch.setattr(gen, "responses", fake_responses)
+    try:
+        gen.run_tax_return_test(MODEL, case.source_id, "high", None, case.tax_year)
+    except _Stop:
+        pass
+    assert len(captured) == 1, case.task_id
+    return captured[0]
+
+
 def test_request_matches_upstream(tasks, upstream, agent, monkeypatch):
+    """The agent's request equals the one upstream's own code path builds."""
     from taxcalcbench.parity_agent import upstream_prompt_from_instruction
 
     adapter, out = tasks
     gen = upstream["gen"]
-    monkeypatch.chdir(ROOT)  # upstream builders read test data relative to cwd
-    effort = upstream["openai_reasoning_effort"]("gpt-6.2-sol", "high")
+    monkeypatch.chdir(ROOT)  # upstream reads test data relative to cwd
 
     for case in adapter.discover():
         task_dir = out / case.task_id
         prompt = upstream_prompt_from_instruction((task_dir / "instruction.md").read_text())
-        args = agent.build_request(prompt, task_dir / "environment" / "input")
-
-        if case.tax_year == "ty25":
-            expected_input = gen.build_ty25_response_input(case.source_id)
-            assert args["input"] == expected_input, case.task_id
-            assert args["stream"] is True and args["timeout"] == gen.TY25_LONG_RUN_TIMEOUT
-        else:
-            tax_year, template = upstream["TY24"]
-            with open(case.case_dir / "input.json") as f:
-                input_data = json.load(f)
-            expected = template.format(tax_year=tax_year, tool_use_hint="", input_data=input_data)
-            assert args["input"] == expected, case.task_id
-            assert "stream" not in args and "timeout" not in args
-        assert args["model"] == MODEL
-        assert args["reasoning"] == {"effort": effort}
+        mine = agent.build_request(prompt, task_dir / "environment" / "input")
+        theirs = _upstream_request(gen, case, monkeypatch)
+        assert mine == theirs, case.task_id
 
 
 def test_prompt_needs_harbor_notes():

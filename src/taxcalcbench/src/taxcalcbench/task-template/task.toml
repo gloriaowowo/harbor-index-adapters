@@ -10,10 +10,11 @@ keywords = ["taxcalcbench", "tax", "finance", "document-understanding", "calcula
 [metadata]
 difficulty = "hard"
 category = "finance"
-tags = ["tax", "pdf", "calculation"]
+tags = ["tax", "{input_tag}", "calculation"]
 
 [agent]
-timeout_sec = 1800.0
+network_mode = "no-network"
+timeout_sec = 3600.0
 
 [verifier]
 environment_mode = "separate"

@@ -1,1 +1,1 @@
-Placeholder: the adapter writes the upstream TaxCalcBench prompt for each case here.
+Placeholder: the adapter replaces this file with the task's instruction.

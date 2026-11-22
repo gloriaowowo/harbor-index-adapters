@@ -1,18 +1,26 @@
-"""TaxCalcBench scoring, vendored from column-tax/tax-calc-bench.
+"""TaxCalcBench scoring, ported from column-tax/tax-calc-bench.
 
-The parsing and comparison code below is copied from
-``tax_calc_bench/tax_return_evaluator.py`` (``TaxReturnEvaluator``) at the
-upstream commit pinned in the adapter (``main.py: TAXCALCBENCH_REF``), MIT
-license. Only the I/O wrapper at the bottom is new. The scored lines and
-XPaths come from ``scored_fields.json``, which the adapter generates from the
-upstream definitions (``get_ty25_scoring_fields`` for TY25,
-``LINES_TO_XPATH_VALUES`` for TY24).
+The four parsing functions below are copied from ``TaxReturnEvaluator`` in
+``tax_calc_bench/tax_return_evaluator.py`` at the pinned upstream commit
+(methods turned into functions); ``evaluate`` follows the same loop and returns
+the metrics as a dict. Copyright (c) 2025 Column Tax, Inc., MIT License; the
+licence text is in UPSTREAM_LICENSE next to this file in every generated task. The scored lines and
+XPaths come from ``scored_fields.json``, generated from the upstream
+definitions (``get_ty25_scoring_fields`` for TY25, ``LINES_TO_XPATH_VALUES``
+for TY24). A unit test in the adapter checks the results against upstream's
+evaluator for every case.
 
 Upstream metrics per return:
 - strictly correct return: every scored line equals the expected value;
 - lenient correct return: every scored line within $5;
 - correct by line / by line lenient: share of scored lines.
-The Harbor reward is the strict one (the leaderboard's headline metric).
+The reward is the strict one (the leaderboard's headline metric).
+
+Three guards that upstream's in-memory path does not need: the answer is read
+as bytes and decoded as UTF-8 with replacement, with no newline translation; an
+answer larger than MAX_OUTPUT_BYTES is scored as a wrong answer without being
+parsed; and an answer path that is a symlink or anything other than a regular
+file counts as no answer.
 """
 
 from __future__ import annotations
@@ -25,6 +33,7 @@ from pathlib import Path
 from lxml import etree
 
 TY25 = "ty25"
+MAX_OUTPUT_BYTES = 5 * 1024 * 1024  # real returns are a few kB
 
 
 # ---- copied from TaxReturnEvaluator (upstream) ------------------------------
@@ -130,7 +139,7 @@ def evaluate(generated_tax_return: str, expected_xml: str, tax_year: str, fields
     }
 
 
-# ---- Harbor I/O wrapper ------------------------------------------------------
+# ---- command-line wrapper ----------------------------------------------------
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
@@ -140,21 +149,22 @@ def main() -> None:
     parser.add_argument("--reward", type=Path, required=True)
     args = parser.parse_args()
 
-    spec = json.loads(args.fields.read_text())
-    if args.output.is_file():
-        generated = args.output.read_text(errors="replace")
-        found = True
+    spec = json.loads(args.fields.read_text(encoding="utf-8"))
+    found = args.output.is_file() and not args.output.is_symlink()
+    too_large = found and args.output.stat().st_size > MAX_OUTPUT_BYTES
+    if found and not too_large:
+        generated = args.output.read_bytes().decode("utf-8", errors="replace")
     else:
         generated = ""
-        found = False
 
-    result = evaluate(generated, args.expected.read_text(), spec["tax_year"], spec["fields"])
+    result = evaluate(generated, args.expected.read_text(encoding="utf-8"), spec["tax_year"], spec["fields"])
     result["output_found"] = found
-    args.report.write_text(json.dumps(result, indent=2) + "\n")
-    reward = 1 if (found and result["strictly_correct_return"]) else 0
-    args.reward.write_text(f"{reward}\n")
+    result["output_too_large"] = too_large
+    args.report.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    reward = 1 if (found and not too_large and result["strictly_correct_return"]) else 0
+    args.reward.write_text(f"{reward}\n", encoding="utf-8")
     print(
-        f"output_found={found} strict={result['strictly_correct_return']} "
+        f"output_found={found} too_large={too_large} strict={result['strictly_correct_return']} "
         f"lenient={result['lenient_correct_return']} "
         f"by_line={result['correct_by_line_score']:.4f} reward={reward}"
     )

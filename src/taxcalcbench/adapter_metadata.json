@@ -13,7 +13,7 @@
           "None"
         ],
         "adaptable": true,
-        "notes": "TaxCalcBench at fdfe0db992ae9033f5b8b942633181a3596da64c: 50 TY2025 PDF cases (federal, CA, IL, NY, VA) and 51 TY2024 JSON cases (federal). Upstream makes one generation call per case and scores the return. Exclusions: none."
+        "notes": "TaxCalcBench at fdfe0db992ae9033f5b8b942633181a3596da64c: 50 TY2025 cases with PDF inputs (10 each: federal, CA, IL, NY, VA) and 51 TY2024 cases with JSON inputs (federal). Upstream makes one model call per case (no agent) and scores the returned form line by line; its leaderboard is per tax year. No exclusions."
       }
     ],
     "harbor_adapter": [
@@ -29,7 +29,7 @@
         "parity_matching_agents": [],
         "parity_unmatching_agents": [],
         "parity_costs": null,
-        "notes": "Parity runs pending. All 101 upstream cases are adapted; the parity subset is 20 fixed cases (parity/parity_cases.txt: two TY2025 cases per jurisdiction and ten TY2024 cases, random.Random(42)). Parity plan: taxcalcbench-direct@1.0.0 (a Harbor port of upstream's single Responses API call) with openai/gpt-6.2-sol at thinking level high, three runs per side, plus one Harbor-only Codex run on the same subset. registry_benchmark_size will be set when the dataset is published."
+        "notes": "Parity runs pending. All 101 upstream cases are adapted; the parity subset is 20 fixed cases (parity/parity_cases.txt: two TY2025 cases per jurisdiction and ten TY2024 cases, random.Random(42)). Parity plan: taxcalcbench-direct@1.0.0 (a Harbor port of upstream's single Responses API call) with openai/gpt-6.2-sol at thinking level high, three runs per side, plus one Harbor-only Codex CLI run on the same subset. parity_matching_agents, parity_unmatching_agents and parity_costs are filled after the runs; registry_benchmark_size is set when the dataset (requested ID column-tax/taxcalcbench, tags v1.0 and parity) is published. The expected returns are public, so the agent phase of every task has no network; Harbor allows the model endpoint it resolves for an installed agent."
       }
     ]
   }

@@ -6,9 +6,10 @@
 #
 # A missing or wrong answer is a valid score of 0 and is written by score.py.
 # If score.py itself fails (crash, missing data), no reward is written and the
-# script exits non-zero, so Harbor records a verifier error instead of a 0.
+# script exits non-zero, so the failure is reported as a verifier error and
+# not as a score of 0.
 mkdir -p /logs/verifier
-rm -f /logs/verifier/reward.txt /logs/verifier/score.json
+rm -f /logs/verifier/reward.txt /logs/verifier/reward.json /logs/verifier/score.json
 
 /usr/local/bin/python3 /tests/score.py \
   --output /app/output/return.txt \

@@ -17,7 +17,7 @@ generation time, never retyped):
   ``LINES_TO_XPATH_VALUES``), written to ``tests/scored_fields.json``;
 - the expected return ``output.xml``, copied to ``tests/expected.xml``.
 
-The only additions are a short "Harbor task notes" block after the upstream
+The only additions are a short "Input files and answer location" block after the upstream
 prompt (where the input files are and where to write the answer), and the
 oracle, which renders each scored line from ``output.xml`` in the upstream
 output format.
@@ -46,6 +46,80 @@ TEST_DATA_DIRS = {
 }
 OUTPUT_PATH = "/app/output/return.txt"
 INPUT_DIR = "/app/input"
+# Heading of the block appended after the upstream prompt in instruction.md.
+NOTES_HEADING = "## Input files and answer location"
+# Hidden work folder inside the output folder while tasks are being written.
+STAGING_DIR = ".staging"
+_PREVIOUS = ".previous"
+
+# Pinned upstream commit (2026-11-17 19:07 PST). Update intentionally when re-syncing.
+PINNED_REF = "fdfe0db992ae9033f5b8b942633181a3596da64c"
+# Upstream's CLI saves model outputs under results/, so those folders may differ.
+_RESULTS_EXCLUDES = (
+    ":(exclude)tax_calc_bench/ty24/results",
+    ":(exclude)tax_calc_bench/ty25/results",
+)
+
+
+def expected_ref() -> str:
+    """The upstream commit the parity tooling requires (parity agent and launcher).
+
+    The pinned commit, unless ``TAXCALCBENCH_EXPECTED_REF`` names another full
+    commit hash. The override exists for one case: a parity run with a model
+    upstream's TY2025 runner does not list, which needs a fork whose only
+    change widens that list. The commit used is recorded with every run.
+    Task generation does not read the variable: it checks an existing checkout
+    against ``PINNED_REF`` (unless ``--allow-other-ref`` is given) and clones
+    the ref named by ``--ref``, which defaults to the pin.
+    """
+    import os
+
+    return os.environ.get("TAXCALCBENCH_EXPECTED_REF") or PINNED_REF
+
+
+def check_pinned_checkout(root: Path, ref: str | None = None) -> str:
+    """Raise unless ``root`` is at the expected commit with unmodified code and test data.
+
+    Checks HEAD and that ``git status`` reports no change outside the
+    ``results/`` folders (prompts, scoring code and test data must be the
+    committed ones), no file there hidden from ``git status`` by an index flag,
+    and no git-ignored file inside the test data. Returns the commit hash.
+    ``ref`` defaults to the pinned commit.
+    """
+    import subprocess
+
+    ref = ref or PINNED_REF
+
+    def git(*args: str) -> str:
+        proc = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise RuntimeError(f"{root} is not a usable git checkout: {proc.stderr.strip()}")
+        return proc.stdout.strip()
+
+    head = git("rev-parse", "HEAD")
+    if head != ref:
+        raise RuntimeError(f"upstream checkout {root} is at {head}, expected {ref}")
+    # Files a user told git to stop watching would not show up in git status
+    # (same paths as the status check below: a checkout without results/ is fine).
+    hidden = [line for line in git("ls-files", "-v", "--", ".", *_RESULTS_EXCLUDES).splitlines()
+              if line[:1].islower() or line[:1] == "S"]
+    if hidden:
+        raise RuntimeError(f"upstream checkout {root} has files hidden from git status (e.g. {hidden[0]!r})")
+    # Explicit options, so the user's git config cannot hide untracked files.
+    status = ("-c", "core.fileMode=true", "status", "--porcelain", "--untracked-files=all")
+
+    def changed(*args: str) -> list[str]:
+        # Finder's .DS_Store folder files are never read by upstream or by the adapter.
+        return [line for line in git(*status, *args).splitlines()
+                if not (line[:2] in ("??", "!!") and Path(line[3:].strip('"')).name == ".DS_Store")]
+
+    dirty = changed("--", ".", *_RESULTS_EXCLUDES)
+    if dirty:
+        raise RuntimeError(f"upstream checkout {root} has local changes outside results/ (e.g. {dirty[0]!r})")
+    ignored = changed("--ignored", "--", *(str(d) for d in TEST_DATA_DIRS.values()))
+    if ignored:
+        raise RuntimeError(f"upstream checkout {root} has extra files in the test data (e.g. {ignored[0]!r})")
+    return head
 
 
 @dataclass(frozen=True)
@@ -74,7 +148,7 @@ class TaxCalcBenchAdapter:
         tax_years: tuple[str, ...] = TAX_YEARS,
         split: str = "full",
     ) -> None:
-        if split not in ("full", "parity"):
+        if split not in ("full", "parity", "sanity"):
             raise ValueError(f"Unknown split: {split}")
         self.output_dir = Path(output_dir)
         self.benchmark_root = Path(benchmark_root).resolve()
@@ -88,13 +162,18 @@ class TaxCalcBenchAdapter:
     # ------------------------------------------------------------------ cases
     def discover(self) -> list[SourceCase]:
         cases: list[SourceCase] = []
-        for tax_year in self.tax_years:
+        for tax_year in TAX_YEARS:
             data_dir = self.benchmark_root / TEST_DATA_DIRS[tax_year]
             for case_dir in sorted(p for p in data_dir.iterdir() if p.is_dir()):
                 if (case_dir / "output.xml").exists():
                     cases.append(SourceCase(tax_year, case_dir.name, case_dir))
-        if self.split == "parity":
+        if self.split in ("parity", "sanity"):
+            # Chosen over all cases first, so the 20 parity cases are the same
+            # whatever --tax-year is given.
             cases = parity_subset(cases)
+        if self.split == "sanity":
+            cases = sanity_subset(cases)
+        cases = [c for c in cases if c.tax_year in self.tax_years]
         if self.task_ids:
             wanted = set(self.task_ids)
             known = {c.task_id for c in cases} | {c.source_id for c in cases}
@@ -108,66 +187,108 @@ class TaxCalcBenchAdapter:
 
     def run(self) -> list[Path]:
         written: list[Path] = []
-        for case in self.discover():
-            task_dir = self.output_dir / case.task_id
-            if task_dir.exists():
-                if not self.overwrite:
+        cases = self.discover()
+        # Tasks are built in a hidden staging folder inside the output folder
+        # (same file system, so the final move is a rename) and moved into
+        # place only when complete: a failed run leaves no partial task, and
+        # --overwrite keeps the old task until its replacement is ready. The
+        # folder holds no task.toml of its own, so it is never read as a task.
+        staging_root = self.output_dir / STAGING_DIR
+        self._clear_staging(staging_root)  # left by a run that was killed
+        try:
+            for case in cases:
+                task_dir = self.output_dir / case.task_id
+                if task_dir.exists() and not self.overwrite:
                     logger.info(f"Skipping existing task {case.task_id}")
                     continue
-                shutil.rmtree(task_dir)
-            # Build in a staging folder and move it into place only when the
-            # task is complete, so a failed run never leaves a partial task.
-            staging = self.output_dir / f".staging-{case.task_id}"
-            if staging.exists():
-                shutil.rmtree(staging)
-            self.output_dir.mkdir(parents=True, exist_ok=True)
-            try:
+                staging = staging_root / case.task_id
+                staging.parent.mkdir(parents=True, exist_ok=True)
                 self._write_task(case, staging)
-                staging.rename(task_dir)
-            finally:
-                if staging.exists():
-                    shutil.rmtree(staging)
-            written.append(task_dir)
+                backup = None
+                if task_dir.exists():
+                    backup = staging_root / f"{case.task_id}{_PREVIOUS}"
+                    task_dir.rename(backup)
+                try:
+                    staging.rename(task_dir)
+                except BaseException:
+                    if backup is not None:
+                        backup.rename(task_dir)  # put the old task back
+                    raise
+                if backup is not None:
+                    shutil.rmtree(backup)
+                written.append(task_dir)
+        finally:
+            self._clear_staging(staging_root)
         return written
+
+    def _clear_staging(self, staging_root: Path) -> None:
+        """Remove the staging folder, first putting back any task it still holds.
+
+        A ``<task>.previous`` folder is an existing task that was moved aside
+        for its replacement. If the task folder is missing (the replacement
+        never arrived), the old task goes back; if that fails, the staging
+        folder stays and the error names it.
+        """
+        if not staging_root.is_dir():
+            return
+        for backup in sorted(staging_root.glob(f"*{_PREVIOUS}")):
+            task_dir = self.output_dir / backup.name[: -len(_PREVIOUS)]
+            if not task_dir.exists():
+                try:
+                    backup.rename(task_dir)
+                except OSError as exc:
+                    raise RuntimeError(
+                        f"could not put the previous task back from {backup}; it is kept there"
+                    ) from exc
+        shutil.rmtree(staging_root)
 
     # ------------------------------------------------------------ generation
     def _write_task(self, case: SourceCase, task_dir: Path) -> None:
-        shutil.copytree(TEMPLATE_DIR, task_dir)
+        # Only the template's own files: no Finder or Python by-products.
+        shutil.copytree(TEMPLATE_DIR, task_dir, ignore=shutil.ignore_patterns(".DS_Store", "__pycache__", "*.pyc"))
 
         # Inputs the agent sees, under environment/input -> /app/input.
         input_dst = task_dir / "environment" / "input"
         input_dst.mkdir(parents=True, exist_ok=True)
         if case.tax_year == TY25:
-            src_inputs = sorted((case.case_dir / "input").iterdir())
-            input_files = [p for p in src_inputs if p.is_file()]
+            # Exactly what upstream reads: the PDFs and remaining_data.json.
+            input_dir = case.case_dir / "input"
+            input_files = sorted([*input_dir.glob("*.pdf"), input_dir / "remaining_data.json"],
+                                 key=lambda p: p.name)
         else:
             input_files = [case.case_dir / "input.json"]
         for src in input_files:
             shutil.copy2(src, input_dst / src.name)
 
-        # Instruction = upstream prompt + Harbor task notes.
+        # Instruction = upstream prompt + the input-files / answer-location notes.
         prompt = self._upstream_prompt(case)
-        notes = _harbor_notes(case, [p.name for p in input_files])
-        (task_dir / "instruction.md").write_text(f"{prompt}\n{notes}")
+        notes = _task_notes(case, [p.name for p in input_files])
+        (task_dir / "instruction.md").write_text(f"{prompt}\n{notes}", encoding="utf-8")
 
         # Verifier data.
         fields = self._scored_fields(case)
         tests = task_dir / "tests"
         shutil.copy2(case.case_dir / "output.xml", tests / "expected.xml")
+        # Upstream's licence and its evaluation-only notice travel with every
+        # copy of its data (verifier side only; the agent never sees tests/).
+        shutil.copy2(self.benchmark_root / "LICENSE", tests / "UPSTREAM_LICENSE")
+        shutil.copy2(self.benchmark_root / "CANARY.txt", tests / "UPSTREAM_NOTICE.txt")
         (tests / "scored_fields.json").write_text(
-            json.dumps({"tax_year": case.tax_year, "fields": fields}, indent=2) + "\n"
+            json.dumps({"tax_year": case.tax_year, "fields": fields}, indent=2) + "\n", encoding="utf-8"
         )
 
         # Oracle: render every scored line from the expected return.
-        oracle = _render_oracle(case, fields, (case.case_dir / "output.xml").read_text())
-        (task_dir / "solution" / "oracle_return.txt").write_text(oracle)
+        oracle = _render_oracle(case, fields, (case.case_dir / "output.xml").read_text(encoding="utf-8"))
+        (task_dir / "solution" / "oracle_return.txt").write_text(oracle, encoding="utf-8")
 
         # task.toml placeholders.
         toml_path = task_dir / "task.toml"
         toml_path.write_text(
-            toml_path.read_text()
+            toml_path.read_text(encoding="utf-8")
             .replace("{task_id}", case.task_id)
             .replace("{form_name}", _form_name(case))
+            .replace("{input_tag}", "pdf" if case.tax_year == TY25 else "json"),
+            encoding="utf-8",
         )
         for script in (task_dir / "solution" / "solve.sh", tests / "test.sh"):
             script.chmod(0o755)
@@ -180,14 +301,14 @@ class TaxCalcBenchAdapter:
             jurisdiction = up["jurisdiction_from_test_name"](case.source_id)
             return up["build_ty25_tax_return_prompt"](
                 jurisdiction,
-                (input_dir / "remaining_data.json").read_text(),
+                (input_dir / "remaining_data.json").read_text(encoding="utf-8"),
                 [p.name for p in pdfs],
                 case.source_id,
             )
         # Upstream (run_tax_return_test) loads input.json and passes
         # json.dumps(...) of it into the TY24 template, with an empty
         # tool_use_hint when web search is off.
-        with open(case.case_dir / "input.json") as f:
+        with open(case.case_dir / "input.json", encoding="utf-8") as f:
             input_data = json.dumps(json.load(f))
         return up["TAX_RETURN_GENERATION_PROMPT"].format(
             tax_year=up["TAX_YEAR"], tool_use_hint="", input_data=input_data
@@ -234,12 +355,35 @@ def parity_subset(cases: list[SourceCase]) -> list[SourceCase]:
     return sorted(picked, key=lambda c: order[id(c)])
 
 
+def sanity_subset(parity_cases: list[SourceCase]) -> list[SourceCase]:
+    """Six parity cases for the pre-run sanity check on both sides.
+
+    The first parity case of three TY25 jurisdictions (us, ca, ny) and the
+    first three TY24 parity cases, so both input formats are exercised.
+    """
+    picked: list[SourceCase] = []
+    for jurisdiction in ("us", "ca", "ny"):
+        picked.append(next(c for c in parity_cases
+                           if c.tax_year == TY25 and c.source_id.split("-")[1] == jurisdiction))
+    picked += [c for c in parity_cases if c.tax_year == TY24][:3]
+    order = {id(c): i for i, c in enumerate(parity_cases)}
+    return sorted(picked, key=lambda c: order[id(c)])
+
+
 def _load_upstream(root: Path) -> dict:
     """Import the prompt and scoring definitions from the upstream checkout."""
     if not (root / "tax_calc_bench").is_dir():
         raise FileNotFoundError(f"Not a TaxCalcBench checkout: {root}")
+    loaded = sys.modules.get("tax_calc_bench")
+    if loaded is not None and not _module_under(loaded, root):
+        # Python keeps the first checkout's modules; a second one would be ignored.
+        raise RuntimeError(
+            f"tax_calc_bench is already loaded from {getattr(loaded, '__file__', '?')}; "
+            f"use one upstream checkout per process (asked for {root})"
+        )
     sys.path.insert(0, str(root))
     try:
+        import tax_calc_bench
         from tax_calc_bench.config import TAX_YEAR, jurisdiction_from_test_name
         from tax_calc_bench.tax_return_evaluator import LINES_TO_XPATH_VALUES
         from tax_calc_bench.ty24_prompt import TAX_RETURN_GENERATION_PROMPT
@@ -247,6 +391,8 @@ def _load_upstream(root: Path) -> dict:
         from tax_calc_bench.ty25_scoring import get_ty25_scoring_fields
     finally:
         sys.path.remove(str(root))
+    if not _module_under(tax_calc_bench, root):
+        raise RuntimeError(f"tax_calc_bench was imported from {tax_calc_bench.__file__}, not from {root}")
     return {
         "TAX_YEAR": TAX_YEAR,
         "jurisdiction_from_test_name": jurisdiction_from_test_name,
@@ -255,6 +401,11 @@ def _load_upstream(root: Path) -> dict:
         "build_ty25_tax_return_prompt": build_ty25_tax_return_prompt,
         "get_ty25_scoring_fields": get_ty25_scoring_fields,
     }
+
+
+def _module_under(module, root: Path) -> bool:
+    file = getattr(module, "__file__", None)
+    return bool(file) and Path(file).resolve().is_relative_to(root.resolve())
 
 
 _FORM_NAMES = {
@@ -272,7 +423,7 @@ def _form_name(case: SourceCase) -> str:
     return f"{_FORM_NAMES[case.source_id.split('-')[1]]} (tax year 2025)"
 
 
-def _harbor_notes(case: SourceCase, input_names: list[str]) -> str:
+def _task_notes(case: SourceCase, input_names: list[str]) -> str:
     files = "\n".join(f"- `{INPUT_DIR}/{name}`" for name in input_names)
     if case.tax_year == TY25:
         where = (
@@ -281,7 +432,7 @@ def _harbor_notes(case: SourceCase, input_names: list[str]) -> str:
     else:
         where = f"The taxpayer data above is also saved as:\n{files}"
     return (
-        "## Harbor task notes\n\n"
+        f"{NOTES_HEADING}\n\n"
         f"{where}\n\n"
         f"Write your final output, in exactly the format described above, to "
         f"`{OUTPUT_PATH}`. Only that file is graded.\n"

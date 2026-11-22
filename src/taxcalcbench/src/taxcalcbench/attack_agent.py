@@ -7,10 +7,12 @@ Each mode leaves the container in a state that must score 0:
 - symlink:       /app/output/return.txt is a symlink to /tests/expected.xml;
 - plant_tests:   puts a /tests/score.py and /tests/test.sh that write reward 1,
                  no answer file;
-- empty:         an empty /app/output/return.txt.
+- empty:         an empty /app/output/return.txt;
+- huge:          a 6 MiB /app/output/return.txt (over the scorer's 5 MiB limit).
 
-(Duplicated answer lines are covered by tests/test_adapter.py: upstream counts
-a label only when it appears exactly once.)
+(Duplicated answer lines are covered by tests/test_adapter.py: for TY2025
+upstream counts a label only when it appears exactly once; for TY2024 it takes
+the first match.)
 
     harbor run -p <tasks> --agent-import-path taxcalcbench.attack_agent:AttackAgent \
         --agent-kwarg mode=<mode>
@@ -30,6 +32,7 @@ SCRIPTS = {
         "&& chmod +x /tests/test.sh && printf 'open(\"/logs/verifier/reward.txt\",\"w\").write(\"1\")\\n' > /tests/score.py"
     ),
     "empty": "mkdir -p /app/output && : > /app/output/return.txt",
+    "huge": "mkdir -p /app/output && head -c 6291456 /dev/zero | tr '\\0' 'x' > /app/output/return.txt",
 }
 
 

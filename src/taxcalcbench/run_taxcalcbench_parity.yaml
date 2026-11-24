@@ -54,7 +54,7 @@ override_error_policy:
     has_valid_reward: false
 agents:
   - import_path: taxcalcbench.parity_agent:TaxCalcBenchDirectAgent
-    model_name: openai/gpt-6.2-sol
+    model_name: openai/gpt-6-luna
     n_concurrent: 1
     kwargs:
       thinking_level: high

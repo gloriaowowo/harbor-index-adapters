@@ -26,7 +26,7 @@ _UTF8 = codecs.lookup(locale.getpreferredencoding(False)).name == "utf-8"
 pytestmark = [pytest.mark.skipif(not ROOT, reason="set TAXCALCBENCH_ROOT to an upstream checkout"),
               pytest.mark.skipif(not _UTF8, reason="the parity agent runs only where text is read as UTF-8")]
 
-MODEL = "openai/gpt-6.2-sol"
+MODEL = "openai/gpt-6-luna"
 
 
 @pytest.fixture(scope="module")
@@ -124,7 +124,7 @@ def test_unmodified_upstream_rejects_unlisted_models_for_ty25():
         from tax_calc_bench.config import validate_ty25_model_selection
     finally:
         sys.path.remove(ROOT)
-    validate_ty25_model_selection("openai", "gpt-6.2-sol", None)
+    validate_ty25_model_selection("openai", "gpt-6-luna", None)
     with pytest.raises(ValueError):
         validate_ty25_model_selection("openai", "gpt-5.4", None)
 
@@ -227,7 +227,7 @@ def _meta(logs: Path):
 
 def _plain_reply(text="Line 1 | x | 5"):
     """A non-streamed Responses API reply, as upstream's text extractor reads it."""
-    return SimpleNamespace(output_text=text, id="resp_2", model="gpt-6.2-sol-test", status="completed",
+    return SimpleNamespace(output_text=text, id="resp_2", model="gpt-6-luna-test", status="completed",
                            usage=SimpleNamespace(input_tokens=3, output_tokens=4))
 
 
@@ -254,7 +254,7 @@ def _events(text, completed=True):
     events = [{"type": "response.output_text.delta", "delta": text}]
     if completed:
         events.append({"type": "response.completed",
-                       "response": {"id": "resp_1", "model": "gpt-6.2-sol-test", "status": "completed",
+                       "response": {"id": "resp_1", "model": "gpt-6-luna-test", "status": "completed",
                                     "usage": {"input_tokens": 7, "output_tokens": 9}}})
     return events
 
@@ -311,7 +311,7 @@ def test_stream_reply_is_written_and_completion_recorded(tasks, tmp_path, monkey
     error, env, meta = _run_agent(tasks, tmp_path, monkeypatch, "ty25-ca-004", lambda **kw: iter(_events("Line 1 | x | 5")))
     assert error is None and env.uploaded == "Line 1 | x | 5"
     assert meta["outcome"] == "ok" and meta["stream_completed"] is True
-    assert meta["served_model"] == "gpt-6.2-sol-test" and meta["input_tokens"] == 7
+    assert meta["served_model"] == "gpt-6-luna-test" and meta["input_tokens"] == 7
     # The versions that built and sent the request, for the comparison with the original side.
     from importlib.metadata import version
 
@@ -358,7 +358,7 @@ def test_ty24_reply_without_streaming_is_written(tasks, tmp_path, monkeypatch):
     assert error is None and env.uploaded == "Line 1 | x | 5"
     assert "stream" not in seen[0] and "timeout" not in seen[0]  # as upstream at thinking level high
     assert meta["outcome"] == "ok" and meta["stream"] is False and meta["request_sent"] is True
-    assert meta["response_status"] == "completed" and meta["served_model"] == "gpt-6.2-sol-test"
+    assert meta["response_status"] == "completed" and meta["served_model"] == "gpt-6-luna-test"
     assert (tmp_path / "logs" / "return.txt").read_text() == "Line 1 | x | 5"
 
 

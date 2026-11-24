@@ -29,7 +29,7 @@ if [ "$6" = -c ]; then
   shasum -a 256 tax_calc_bench/main.py | cut -d' ' -f1 > "$FAKE_PID_FILE.export_sha"   # the exported code, as Python would read it
   if [ "$mode" = dirty_at_startup ]; then echo "x = 3" > "$4/tax_calc_bench/main.py"; fi
   if [ "$mode" = bad_locale ]; then echo "upstream would read its test data as ascii" >&2; exit 1; fi
-  model=$8; [ "$model" = sol-alias ] && model=gpt-6.2-sol
+  model=$8; [ "$model" = luna-alias ] && model=gpt-6-luna
   echo "NAMES $model $9 ${FAKE_EFFORT:-high}"
   echo "VERSIONS ${FAKE_LITELLM:-1.100.5} 2.43.0 3.13.9"
   if [ "$mode" = wrong_module ]; then echo "MODULE /somewhere/else/tax_calc_bench"; else echo "MODULE $(pwd -P)/tax_calc_bench"; fi
@@ -82,7 +82,7 @@ def env(tmp_path):
     (repo / "tax_calc_bench" / "main.py").write_text("x = 1\n")
     (repo / ".gitignore").write_text(".env\n.venv/\n")
     # Like upstream, the checkout has a saved leaderboard output committed in c2's slot.
-    slot = repo / "tax_calc_bench" / "ty25" / "results" / "c2" / "openai" / "gpt-6.2-sol"
+    slot = repo / "tax_calc_bench" / "ty25" / "results" / "c2" / "openai" / "gpt-6-luna"
     slot.mkdir(parents=True)
     (slot / "model_completed_return_high_1.md").write_text("committed leaderboard reply\n")
     (slot / "evaluation_result_high_1.md").write_text("committed evaluation\nStrictly correct return: False\n")
@@ -165,7 +165,7 @@ def test_complete_run_leaves_the_checkout_alone(env):
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert {k: v[5] for k, v in _status(tmp_path).items()} == {"c1": "ok", "c2": "ok", "c3": "ok"}
     settings = (tmp_path / "out" / "run_1" / "run.settings").read_text().splitlines()
-    assert settings[:7] == [f"upstream_commit={e['TAXCALCBENCH_EXPECTED_REF']}", "model=openai/gpt-6.2-sol",
+    assert settings[:7] == [f"upstream_commit={e['TAXCALCBENCH_EXPECTED_REF']}", "model=openai/gpt-6-luna",
                             "thinking_level=high", "reasoning_effort=high", "api_base=http://127.0.0.1:9/v1",
                             "litellm=1.100.5", "openai=2.43.0"]
     assert settings[7].startswith("cases_sha256=") and settings[8] == "limit=0" and len(settings) == 9
@@ -714,11 +714,11 @@ def test_a_run_folder_left_empty_by_a_stopped_launcher_is_no_run(env):
 
 def test_canonical_names_and_host_are_recorded(env):
     e, tmp_path, mode, _ = env
-    proc = _launch(e, RUN="1", MODEL="sol-alias", OPENAI_BASE_URL="http://user:pw@EXAMPLE.Host:8080/v1")
+    proc = _launch(e, RUN="1", MODEL="luna-alias", OPENAI_BASE_URL="http://user:pw@EXAMPLE.Host:8080/v1")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     settings = (tmp_path / "out" / "run_1" / "run.settings").read_text()
     # The endpoint is recorded with port and path and without credentials.
-    assert "model=openai/gpt-6.2-sol\n" in settings and "api_base=http://example.host:8080/v1\n" in settings
+    assert "model=openai/gpt-6-luna\n" in settings and "api_base=http://example.host:8080/v1\n" in settings
     assert "pw" not in settings
 
 

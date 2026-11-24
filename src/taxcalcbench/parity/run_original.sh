@@ -50,7 +50,7 @@ PINNED_SHA=${TAXCALCBENCH_EXPECTED_REF:-fdfe0db992ae9033f5b8b942633181a3596da64c
 : "${OPENAI_API_KEY:?}"
 : "${RUN:?set RUN to the run label (1, 2, 3, sanity)}"
 : "${OUT_DIR:?}"
-MODEL=${MODEL:-gpt-6.2-sol}
+MODEL=${MODEL:-gpt-6-luna}
 LEVEL=${THINKING_LEVEL:-high}
 CASES_FILE=${CASES_FILE:-$(dirname "$0")/parity_cases.txt}
 LIMIT=${LIMIT:-0}

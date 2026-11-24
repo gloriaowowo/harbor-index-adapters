@@ -21,7 +21,7 @@ environment:
   delete: true
 agents:
   - name: codex
-    model_name: openai/gpt-6.2-sol
+    model_name: openai/gpt-6-luna
     kwargs:
       version: "0.171.0"
       reasoning_effort: high

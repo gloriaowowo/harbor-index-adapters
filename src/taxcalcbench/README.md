@@ -66,7 +66,7 @@ call from the host and writes the reply into the task container.
 
 A unit test captures the request that upstream's own code sends
 (`run_tax_return_test`) and checks that the agent's request equals it for all
-101 cases, for `openai/gpt-6.2-sol` at thinking level `high`. Before any trial
+101 cases, for `openai/gpt-6-luna` at thinking level `high`. Before any trial
 starts, the agent checks that `TAXCALCBENCH_ROOT` is an unmodified checkout of
 the pinned commit, that upstream's modules are loaded from it, that
 `LITELLM_LOCAL_MODEL_COST_MAP=True` is set, as upstream sets it, and that the
@@ -143,12 +143,12 @@ uv run taxcalcbench --taxcalcbench-root /path/to/tax-calc-bench \
 
 ## Comparison with Original Benchmark (Parity)
 
-Parity runs are pending (they need the team's API key). Plan:
+Parity runs are pending. Plan:
 
 | Item | Setting |
 |---|---|
 | Agent, both sides | `taxcalcbench-direct@1.0.0` on Harbor; unmodified upstream at the pinned commit on the original side |
-| Model | `openai/gpt-6.2-sol`, thinking level `high`, no web search. This is the exact model ID upstream's runner lists (its config has no dated snapshot for it); the Harbor side records the model name the API returns for every call |
+| Model | `openai/gpt-6-luna`, thinking level `high`, no web search; the model was set by the Harbor-Index maintainers. This is the exact model ID upstream's runner lists (its config has no dated snapshot for it); the Harbor side records the model name the API returns for every call. Upstream's saved TY2025 results for this model and level: 4% strictly correct, 63.69% by line (1 of the 10 TY2025 parity cases strictly correct). The strict score sits near 0 for this model and moves in steps of 5 points with 20 cases, so the by-line score is the more sensitive of the two metrics here |
 | Subset | 20 cases (19.8%): 2 TY2025 cases per jurisdiction and 10 TY2024 cases ([parity_cases.txt](parity/parity_cases.txt)) |
 | Runs | 3 per side: 6-case sanity check on both sides ([sanity_cases.txt](parity/sanity_cases.txt)), then run 1 on both sides, then runs 2 and 3 |
 | Metrics | Strictly correct returns (%) and correct by line (%), both as upstream computes them |
@@ -156,8 +156,8 @@ Parity runs are pending (they need the team's API key). Plan:
 
 | Agent | Model | Metric | Runs | Dataset Size | Original (mean ± SEM) | Harbor (mean ± SEM) |
 |---|---|---|---|---|---|---|
-| taxcalcbench-direct@1.0.0 | openai/gpt-6.2-sol | Strictly correct returns (%) | TBD (3 planned) | 20 (19.8%) | TBD | TBD |
-| taxcalcbench-direct@1.0.0 | openai/gpt-6.2-sol | Correct by line (%) | TBD (3 planned) | 20 (19.8%) | TBD | TBD |
+| taxcalcbench-direct@1.0.0 | openai/gpt-6-luna | Strictly correct returns (%) | TBD (3 planned) | 20 (19.8%) | TBD | TBD |
+| taxcalcbench-direct@1.0.0 | openai/gpt-6-luna | Correct by line (%) | TBD (3 planned) | 20 (19.8%) | TBD | TBD |
 
 **Subset rule.** `parity_subset` in [adapter.py](src/taxcalcbench/adapter.py)
 uses one `random.Random(42)`: it samples two of the sorted TY2025 case names in

@@ -14,7 +14,7 @@ into Harbor tasks. Upstream code and data are pinned to commit
 | Coverage | 50 TY2025 cases and 51 TY2024 cases; no exclusions |
 | Reward | 1 if every scored line is exact, otherwise 0 (upstream's "correct returns (strict)") |
 | Verification | Deterministic; runs in a separate verifier container |
-| Status | Oracle 101/101. Parity matched: all 101 tasks, 5 runs per side, the run ranges overlap on all four upstream metrics (see Parity). Codex CLI: 35.0% strictly correct returns over 100 of 101 tasks. Dataset publication and artifact upload pending |
+| Status | Oracle 101/101. Parity matched: all 101 tasks, 5 runs per side, the run ranges overlap on all four upstream metrics (see Parity). Codex CLI: 35.0% strictly correct returns over 100 of 101 tasks. Dataset PR and parity artifacts linked below |
 
 ## What is TaxCalcBench?
 
@@ -288,8 +288,8 @@ stays with that attempt and is never counted.
 |---|---|
 | Original benchmark | [column-tax/tax-calc-bench@fdfe0db](https://github.com/column-tax/tax-calc-bench/tree/fdfe0db992ae9033f5b8b942633181a3596da64c) (unmodified; upstream's runner lists `gpt-6-luna`) |
 | Adapter PR | [harbor-index/adapters#27](https://github.com/harbor-index/adapters/pull/27) (first copy, closed: [harbor-framework/adapters#126](https://github.com/harbor-framework/adapters/pull/126)) |
-| Dataset PR | TBD |
-| Parity PR (Hugging Face) | TBD |
+| Dataset PR | [harbor-framework/harbor-datasets#318](https://github.com/harbor-framework/harbor-datasets/pull/318) |
+| Parity PR (Hugging Face) | [harborframework/parity-experiments#321](https://huggingface.co/datasets/harborframework/parity-experiments/discussions/321); files mirrored at [gigiiii2025/taxcalcbench-parity-experiments@732f335](https://huggingface.co/datasets/gigiiii2025/taxcalcbench-parity-experiments/tree/732f335d671e6ee4c82483e17e47a78540640334/adapters/taxcalcbench) while that repository is over the Hub's file limit |
 
 ## Notes & Caveats
 

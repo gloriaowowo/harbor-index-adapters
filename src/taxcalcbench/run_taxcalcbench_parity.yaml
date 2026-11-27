@@ -1,25 +1,26 @@
-# Parity experiment, adapted side: one run over the 20-case parity subset with
-# taxcalcbench-direct, the port of upstream's single generation call.
+# Parity experiment, adapted side: one run over all 101 cases with
+# taxcalcbench-direct, the port of upstream's single generation call, on Daytona.
 #
-# 1. Generate the subset, from src/taxcalcbench:
-#      uv run taxcalcbench --split parity --output-dir ../../datasets/taxcalcbench-parity
+# 1. Generate the full set, from src/taxcalcbench:
+#      uv run taxcalcbench --output-dir ../../datasets/taxcalcbench-full
 #    For the 6-case sanity check that comes first, generate
 #      uv run taxcalcbench --split sanity --output-dir ../../datasets/taxcalcbench-sanity
 #    and run the command in step 2 with `-p datasets/taxcalcbench-sanity` and
-#    `--job-name parity-sanity`.
+#    `--job-name full-sanity`.
 # 2. From the repository root, with the parity extra installed, run once per
-#    run number with a new --job-name (run 1 on both sides first, then 2 and 3):
+#    run number with a new --job-name (run 1 on both sides first, then runs 2 to 5):
 #      export TAXCALCBENCH_ROOT=/path/to/tax-calc-bench        # unmodified checkout of the pinned commit
 #      export OPENAI_API_KEY=...
 #      export OPENAI_BASE_URL=...                              # same endpoint as the original side
 #      export OPENAI_API_BASE="$OPENAI_BASE_URL"
 #      export LITELLM_LOCAL_MODEL_COST_MAP=True                # same LiteLLM model table as upstream
+#      export DAYTONA_API_KEY=...
 #      uv run --project src/taxcalcbench --extra parity harbor run \
-#        -c src/taxcalcbench/run_taxcalcbench_parity.yaml --job-name parity-run1
+#        -c src/taxcalcbench/run_taxcalcbench_parity.yaml --job-name full-run1
 #    To attempt again the cases parity/collect_parity.py lists as not scored,
 #    start a second job for just those tasks: the command above with
-#    `-p datasets/taxcalcbench-parity -i <task folder, e.g. ty25-ca-004>`
-#    (one -i per task) and a new --job-name (e.g. parity-run1-retry), with the
+#    `-p datasets/taxcalcbench-full -i <task folder, e.g. ty25-ca-004>`
+#    (one -i per task) and a new --job-name (e.g. full-run1-retry), with the
 #    same settings, and give both job folders to the collector joined by a
 #    comma, the run's own job first. The first valid attempt of a case counts.
 #
@@ -34,12 +35,12 @@ jobs_dir: jobs
 n_attempts: 1
 n_concurrent_trials: 4
 environment:
-  type: docker
+  type: daytona
   delete: true
 # A trial that hits the time limit has no reply to score. Upstream leaves a
 # failed generation unscored, so its reward is marked invalid here as well.
-# RuntimeError is what the Docker backend raises when a container or network
-# step around the agent fails, before or after the agent ran. The harness
+# RuntimeError is what the Docker and Daytona backends raise when a container,
+# sandbox or network step around the agent fails, before or after the agent ran. The harness
 # cannot tell the two apart, so the job marks both invalid.
 # parity/collect_parity.py is the authority for the parity numbers: it counts
 # such a trial only when the reply had been delivered and scored (the collected
@@ -61,4 +62,4 @@ agents:
     # Upstream's TY25 calls use a 14,400 s request timeout; keep the trial limit above it.
     override_timeout_sec: 15000
 datasets:
-  - path: datasets/taxcalcbench-parity
+  - path: datasets/taxcalcbench-full

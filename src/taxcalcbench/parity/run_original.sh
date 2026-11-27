@@ -37,7 +37,7 @@
 # From the repository root:
 #   export OPENAI_API_KEY=...
 #   export OPENAI_BASE_URL=...          # same endpoint as the Harbor side
-#   TAXCALCBENCH_ROOT=/path/to/tax-calc-bench RUN=1 OUT_DIR=parity-experiments/original \
+#   TAXCALCBENCH_ROOT=/path/to/tax-calc-bench RUN=1 OUT_DIR=parity-experiments/full-original \
 #     [CASES_FILE=src/taxcalcbench/parity/sanity_cases.txt] [LIMIT=5] [RERUN_FAILED=1] \
 #     bash src/taxcalcbench/parity/run_original.sh
 set -euo pipefail
@@ -52,7 +52,7 @@ PINNED_SHA=${TAXCALCBENCH_EXPECTED_REF:-fdfe0db992ae9033f5b8b942633181a3596da64c
 : "${OUT_DIR:?}"
 MODEL=${MODEL:-gpt-6-luna}
 LEVEL=${THINKING_LEVEL:-high}
-CASES_FILE=${CASES_FILE:-$(dirname "$0")/parity_cases.txt}
+CASES_FILE=${CASES_FILE:-$(dirname "$0")/full_cases.txt}
 LIMIT=${LIMIT:-0}
 RERUN_FAILED=${RERUN_FAILED:-0}
 API_BASE=${OPENAI_BASE_URL:-${OPENAI_API_BASE:-https://api.openai.com/v1}}

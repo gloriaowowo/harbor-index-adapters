@@ -148,7 +148,7 @@ class TaxCalcBenchAdapter:
         tax_years: tuple[str, ...] = TAX_YEARS,
         split: str = "full",
     ) -> None:
-        if split not in ("full", "parity", "sanity"):
+        if split not in ("full", "sanity"):
             raise ValueError(f"Unknown split: {split}")
         self.output_dir = Path(output_dir)
         self.benchmark_root = Path(benchmark_root).resolve()
@@ -167,12 +167,10 @@ class TaxCalcBenchAdapter:
             for case_dir in sorted(p for p in data_dir.iterdir() if p.is_dir()):
                 if (case_dir / "output.xml").exists():
                     cases.append(SourceCase(tax_year, case_dir.name, case_dir))
-        if self.split in ("parity", "sanity"):
-            # Chosen over all cases first, so the 20 parity cases are the same
-            # whatever --tax-year is given.
-            cases = parity_subset(cases)
         if self.split == "sanity":
-            cases = sanity_subset(cases)
+            # Chosen over all cases first, so the six cases are the same
+            # whatever --tax-year is given.
+            cases = sanity_subset(_seeded_sample(cases))
         cases = [c for c in cases if c.tax_year in self.tax_years]
         if self.task_ids:
             wanted = set(self.task_ids)
@@ -329,44 +327,45 @@ class TaxCalcBenchAdapter:
 
 
 # ---------------------------------------------------------------------- helpers
-PARITY_SEED = 42
-PARITY_TY25_PER_JURISDICTION = 2
-PARITY_TY24 = 10
+SAMPLE_SEED = 42
+SAMPLE_TY25_PER_JURISDICTION = 2
+SAMPLE_TY24 = 10
 
 
-def parity_subset(cases: list[SourceCase]) -> list[SourceCase]:
-    """Fixed 20-case parity subset.
+def _seeded_sample(cases: list[SourceCase]) -> list[SourceCase]:
+    """Fixed sample the sanity cases are taken from.
 
     Two TY25 cases per jurisdiction (us, ca, il, ny, va) and ten TY24 cases,
     each drawn with ``random.Random(42)`` from the sorted case names, so the
-    subset is the same on every run and on both parity sides.
+    sample is the same on every run and on both parity sides.
     """
     import random
 
-    rng = random.Random(PARITY_SEED)
+    rng = random.Random(SAMPLE_SEED)
     picked: list[SourceCase] = []
     ty25 = sorted((c for c in cases if c.tax_year == TY25), key=lambda c: c.source_id)
     for jurisdiction in ("us", "ca", "il", "ny", "va"):
         pool = [c for c in ty25 if c.source_id.split("-")[1] == jurisdiction]
-        picked += rng.sample(pool, min(PARITY_TY25_PER_JURISDICTION, len(pool)))
+        picked += rng.sample(pool, min(SAMPLE_TY25_PER_JURISDICTION, len(pool)))
     ty24 = sorted((c for c in cases if c.tax_year == TY24), key=lambda c: c.source_id)
-    picked += rng.sample(ty24, min(PARITY_TY24, len(ty24)))
+    picked += rng.sample(ty24, min(SAMPLE_TY24, len(ty24)))
     order = {id(c): i for i, c in enumerate(cases)}
     return sorted(picked, key=lambda c: order[id(c)])
 
 
-def sanity_subset(parity_cases: list[SourceCase]) -> list[SourceCase]:
-    """Six parity cases for the pre-run sanity check on both sides.
+def sanity_subset(sample: list[SourceCase]) -> list[SourceCase]:
+    """Six cases for the pre-run sanity check on both sides.
 
-    The first parity case of three TY25 jurisdictions (us, ca, ny) and the
-    first three TY24 parity cases, so both input formats are exercised.
+    From the seeded sample: the first case of three TY25 jurisdictions
+    (us, ca, ny) and the first three TY24 cases, so both input formats are
+    exercised.
     """
     picked: list[SourceCase] = []
     for jurisdiction in ("us", "ca", "ny"):
-        picked.append(next(c for c in parity_cases
+        picked.append(next(c for c in sample
                            if c.tax_year == TY25 and c.source_id.split("-")[1] == jurisdiction))
-    picked += [c for c in parity_cases if c.tax_year == TY24][:3]
-    order = {id(c): i for i, c in enumerate(parity_cases)}
+    picked += [c for c in sample if c.tax_year == TY24][:3]
+    order = {id(c): i for i, c in enumerate(sample)}
     return sorted(picked, key=lambda c: order[id(c)])
 
 

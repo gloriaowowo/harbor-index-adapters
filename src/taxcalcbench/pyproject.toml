@@ -10,7 +10,7 @@ dependencies = ["lxml>=6.0", "numpy>=1.24"]  # numpy: imported by upstream tax_r
 # Parity agent (taxcalcbench.parity_agent). LiteLLM and the OpenAI SDK are pinned
 # to the versions in upstream tax-calc-bench@fdfe0db's uv.lock; google-genai and
 # httpx are imported by upstream's generator, python-dotenv by its CLI.
-parity = ["harbor==0.27.0", "litellm==1.100.5", "openai==2.43.0", "google-genai>=2.17.0,<3.0.0", "httpx>=0.28.1", "python-dotenv>=1.2.2"]
+parity = ["harbor[daytona]==0.27.0", "litellm==1.100.5", "openai==2.43.0", "google-genai>=2.17.0,<3.0.0", "httpx>=0.28.1", "python-dotenv>=1.2.2"]
 
 [project.scripts]
 taxcalcbench = "taxcalcbench.main:main"

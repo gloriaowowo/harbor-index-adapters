@@ -7,7 +7,7 @@ Harbor side: one Harbor job directory per run; each trial's ``result.json``,
 ``verifier/score.json`` (written by ``tests/score.py``) and the agent's
 ``agent/request_meta.json``. When cases without a valid score were attempted
 again in a second job, give both directories joined by a comma
-(``jobs/parity-run1,jobs/parity-run1-retry``), the run's own job first and
+(``jobs/full-run1,jobs/full-run1-retry``), the run's own job first and
 the retry jobs after it in the order they were made: a later directory only
 fills cases that have no valid score yet. The first valid attempt of a case
 counts; a later attempt of the same case is listed and ignored.
@@ -15,16 +15,26 @@ counts; a later attempt of the same case is listed and ignored.
 From the repository root:
 
     python3 src/taxcalcbench/parity/collect_parity.py \\
-        --original parity-experiments/original/run_1 parity-experiments/original/run_2 parity-experiments/original/run_3 \\
-        --harbor jobs/parity-run1 jobs/parity-run2 jobs/parity-run3 \\
-        [--cases src/taxcalcbench/parity/parity_cases.txt] [--json parity-experiments/summary.json] \\
+        --cases src/taxcalcbench/parity/full_cases.txt \\
+        --same-cases src/taxcalcbench/parity/full_cases_harbor_order.txt \\
+        --original parity-experiments/full-original/run_{1,2,3,4,5} \\
+        --harbor jobs/full-run1,jobs/full-run1-retry jobs/full-run2 \\
+                 jobs/full-run3,jobs/full-run3-retry,jobs/full-run3-retry2 \\
+                 jobs/full-run4,jobs/full-run4-retry,jobs/full-run4-retry2 jobs/full-run5 \\
+        [--json parity-experiments/summary.json] \\
         [--export-dir parity-experiments/results_collection]
 
-Metrics per run, both as upstream's evaluator computes them: strictly correct
-returns (%) and mean correct-by-line (%), over the cases with a valid score.
+Metrics per run, all four as upstream's evaluator computes them, over the cases
+with a valid score: strictly correct returns (%), mean correct-by-line (%), and
+their lenient versions, where a line within $5 of the expected amount counts
+(lenient correct returns (%), mean correct-by-line lenient (%)).
 Both sides use the same arithmetic: a case's by-line score is
 100 * (correct lines / scored lines), and a run's score is the mean over its
-scored cases in case-list order.
+scored cases in case-list order. The original side's lenient count is read from
+the expected and actual amounts on each line of upstream's report and checked
+against the lenient summary upstream printed; the Harbor side's from the
+verifier's per-line ``lenient_correct`` marks, checked against its
+``lenient_correct_return``.
 
 What counts as a valid score:
 - original: the launcher recorded the case as ``ok`` (its own status file for
@@ -63,7 +73,7 @@ everywhere; no answer exceeded the scorer's size limit; no two served-model
 names were reported; and no job, trial or run is given twice. The report lists
 every attempt, counted or not.
 Scores are exact fractions, so equal results compare equal. Parity is claimed
-only when the data are complete and the run ranges overlap on both metrics.
+only when the data are complete and the run ranges overlap on all four metrics.
 Exit code: 0 = complete and matching, 1 = incomplete (also when the collection
 stops with a message and writes no report, for example for a run made with
 LIMIT or an unreadable file), 3 = complete but the ranges do not overlap. A
@@ -89,6 +99,11 @@ from pathlib import Path
 
 CORRECT_MARK = ": ✓ correct, expected:"
 INCORRECT_MARK = ": ✗ incorrect, expected:"
+LINE_RESULT = re.compile(r": (✓ correct|✗ incorrect), expected: (\S+), actual: (\S+)[ \t]*$", re.M)
+LENIENT_DOLLARS = 5  # upstream: abs(actual - expected) <= 5
+METRICS = ("strict", "by_line", "lenient_strict", "lenient_by_line")
+LABELS = {"strict": "strict", "by_line": "by-line", "lenient_strict": "lenient strict",
+          "lenient_by_line": "lenient by-line"}
 PROVENANCE = ("upstream_commit", "model", "thinking_level", "reasoning_effort", "api_base", "litellm", "openai")
 REQUEST_KEYS = ("reasoning", "stream", "timeout", "n_pdfs")
 # The answer file as Harbor collects it from the task container (task.toml: artifacts).
@@ -119,6 +134,16 @@ def _cases(path: Path) -> dict[str, str]:
     return {r[0]: (r[1] if len(r) > 1 else "") for r in rows}
 
 
+def _case_rows(path: Path) -> list[tuple]:
+    """The case list's lines (comments and blank lines left out), sorted, so two orders of one list compare equal."""
+    return sorted(tuple(l.split()) for l in _text(path).splitlines() if l.strip() and not l.startswith("#"))
+
+
+def _comparable(settings: dict) -> dict:
+    """A run's settings without the case-list hash, which the case-list check compares on its own."""
+    return {k: v for k, v in settings.items() if k != "cases_sha256"}
+
+
 def _record_provenance(meta: dict) -> tuple:
     """(commit, model, level, effort, API base URL, litellm, openai) as the agent recorded them for one request."""
     effort = (meta.get("reasoning") or {}).get("effort") if isinstance(meta.get("reasoning"), dict) else None
@@ -126,9 +151,11 @@ def _record_provenance(meta: dict) -> tuple:
             meta.get("litellm_version"), meta.get("openai_version"))
 
 
-def _case_score(correct: int, total: int) -> dict:
-    """Same arithmetic for both sides: counts only, turned into exact fractions later."""
-    return {"strict": correct == total, "correct": correct, "total": total}
+def _case_score(correct: int, total: int, lenient: int) -> dict:
+    """Same arithmetic for both sides: counts only, turned into exact fractions later.
+    lenient: lines within $5 of the expected amount (a correct line always counts)."""
+    return {"strict": correct == total, "correct": correct, "total": total,
+            "lenient_strict": lenient == total, "lenient": lenient}
 
 
 def _original_run(run_dir: Path, cases: dict[str, str], level: str) -> dict:
@@ -167,15 +194,27 @@ def _original_run(run_dir: Path, cases: dict[str, str], level: str) -> dict:
                                  else "no status record of the launcher for this case")
             continue
         text = _text(f)
-        correct = text.count(CORRECT_MARK)
-        total = correct + text.count(INCORRECT_MARK)
+        # Per-line results are the block before upstream's summary; nothing after it is counted.
+        block = text.split("\nStrictly correct return:", 1)[0]
+        correct = block.count(CORRECT_MARK)
+        total = correct + block.count(INCORRECT_MARK)
         strict = re.search(r"Strictly correct return: (True|False)", text)
         reported = re.search(r"Correct \(by line\): ([\d.]+)%", text)
-        if not total or not strict or not reported:
+        lenient_strict = re.search(r"Lenient correct return: (True|False)", text)
+        lenient_reported = re.search(r"Correct \(by line, lenient\): ([\d.]+)%", text)
+        if not total or not strict or not reported or not lenient_strict or not lenient_reported:
             raise SystemExit(f"{f}: not a complete upstream evaluation report")
-        score = _case_score(correct, total)
+        marks = LINE_RESULT.findall(block)
+        if len(marks) != total:
+            raise SystemExit(f"{f}: the expected and actual amounts of some lines cannot be read")
+        lenient = sum(1 for mark, expected, actual in marks
+                      if mark.startswith("✓") or abs(float(actual) - float(expected)) <= LENIENT_DOLLARS)
+        score = _case_score(correct, total, lenient)
         if abs(100 * correct / total - float(reported.group(1))) > 0.0051 or (strict.group(1) == "True") != score["strict"]:
             raise SystemExit(f"{f}: per-line marks disagree with the summary upstream printed")
+        if (abs(100 * lenient / total - float(lenient_reported.group(1))) > 0.0051
+                or (lenient_strict.group(1) == "True") != score["lenient_strict"]):
+            raise SystemExit(f"{f}: lenient per-line results disagree with the lenient summary upstream printed")
         scored[task_id] = score
     shared = set()
     provenance = tuple(settings.get(key) for key in PROVENANCE)
@@ -222,9 +261,30 @@ def _harbor_trial(trial: Path, result: dict) -> tuple[dict | None, str, dict]:
         raise SystemExit(f"{score_file}: no per-line results")
     if not all(isinstance(line.get("correct"), bool) for line in lines):
         raise SystemExit(f"{score_file}: per-line results are not true/false")
-    score = _case_score(sum(1 for line in lines if line["correct"]), len(lines))
-    if score["strict"] != bool(s.get("strictly_correct_return")):
+    correct = sum(1 for line in lines if line["correct"])
+    if (correct == len(lines)) != bool(s.get("strictly_correct_return")):
         raise SystemExit(f"{score_file}: per-line results disagree with strictly_correct_return")
+    if not all(isinstance(line.get("lenient_correct"), bool) for line in lines):
+        raise SystemExit(f"{score_file}: per-line lenient results are not true/false")
+    if any(line["correct"] and not line["lenient_correct"] for line in lines):
+        raise SystemExit(f"{score_file}: a correct line is marked not lenient-correct")
+    for key in ("strictly_correct_return", "lenient_correct_return"):
+        if not isinstance(s.get(key), bool):
+            raise SystemExit(f"{score_file}: {key} is not true/false")
+    for line in lines:
+        e, a = line.get("expected"), line.get("actual")
+        if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (e, a)):
+            raise SystemExit(f"{score_file}: a line has no numeric expected/actual amount")
+        # The verifier's rule, which is upstream's: exact equality, and abs(actual - expected) <= 5.
+        if line["correct"] != (a == e) or line["lenient_correct"] != (a == e or abs(a - e) <= LENIENT_DOLLARS):
+            raise SystemExit(f"{score_file}: per-line marks disagree with the line's own amounts")
+    lenient = sum(1 for line in lines if line["lenient_correct"])
+    for key, n in (("correct_by_line_score", correct), ("lenient_correct_by_line_score", lenient)):
+        if not isinstance(s.get(key), (int, float)) or isinstance(s.get(key), bool) or abs(s[key] - n / len(lines)) > 1e-9:
+            raise SystemExit(f"{score_file}: {key} disagrees with the per-line results")
+    score = _case_score(correct, len(lines), lenient)
+    if score["lenient_strict"] != s["lenient_correct_return"]:
+        raise SystemExit(f"{score_file}: lenient per-line results disagree with lenient_correct_return")
     score["output_too_large"] = bool(s.get("output_too_large"))
     return score, "", meta
 
@@ -388,27 +448,33 @@ def _overlap(a: list, b: list) -> bool:
     return max(a) >= min(b) and max(b) >= min(a)
 
 
-def _run_scores(run: dict, cases: dict[str, str]) -> tuple[Fraction, Fraction] | None:
-    """Exact run scores in percent, so equal results compare equal on both sides; None without a scored case."""
+def _run_scores(run: dict, cases: dict[str, str]) -> dict[str, Fraction] | None:
+    """Exact run scores in percent for METRICS, so equal results compare equal on both sides;
+    None without a scored case."""
     vals = [run["scored"][t] for t in cases if t in run["scored"]]
     if not vals:
         return None
     for v in vals:
-        if not (isinstance(v["correct"], int) and isinstance(v["total"], int) and 0 <= v["correct"] <= v["total"] and v["total"] > 0):
+        if not (isinstance(v["correct"], int) and isinstance(v["total"], int) and isinstance(v["lenient"], int)
+                and 0 <= v["correct"] <= v["lenient"] <= v["total"] and v["total"] > 0):
             raise SystemExit(f"run {run['name']}: invalid line counts {v}")
-    strict = Fraction(100 * sum(1 for v in vals if v["strict"]), len(vals))
-    by_line = sum((Fraction(100 * v["correct"], v["total"]) for v in vals), Fraction(0)) / len(vals)
-    return strict, by_line
+    n = len(vals)
+    return {"strict": Fraction(100 * sum(1 for v in vals if v["strict"]), n),
+            "by_line": sum((Fraction(100 * v["correct"], v["total"]) for v in vals), Fraction(0)) / n,
+            "lenient_strict": Fraction(100 * sum(1 for v in vals if v["lenient_strict"]), n),
+            "lenient_by_line": sum((Fraction(100 * v["lenient"], v["total"]) for v in vals), Fraction(0)) / n}
 
 
 def _summ(runs: list[dict], cases: dict[str, str]) -> dict:
-    pairs = [_run_scores(run, cases) for run in runs]
-    have = [p for p in pairs if p is not None]
-    strict, by_line = [p[0] for p in have], [p[1] for p in have]
-    return {"strict_exact": strict, "by_line_exact": by_line, "all_runs_scored": len(have) == len(pairs),
-            "strict_runs": [float(p[0]) if p else None for p in pairs],
-            "by_line_runs": [float(p[1]) if p else None for p in pairs],
-            "strict": _mean_sem(strict) if have else None, "by_line": _mean_sem(by_line) if have else None}
+    scores = [_run_scores(run, cases) for run in runs]
+    have = [s for s in scores if s is not None]
+    out = {"all_runs_scored": len(have) == len(scores)}
+    for m in METRICS:
+        xs = [s[m] for s in have]
+        out[f"{m}_exact"] = xs
+        out[f"{m}_runs"] = [float(s[m]) if s else None for s in scores]
+        out[m] = _mean_sem(xs) if have else None
+    return out
 
 
 def _fmt(pair: tuple[float, float | None] | None) -> str:
@@ -428,7 +494,10 @@ def main() -> None:
                    help="one run folder per run (run_original.sh's run_<N>)")
     p.add_argument("--harbor", nargs="+", required=True,
                    help="one Harbor job dir per run; add a run's retry jobs after it, joined by commas")
-    p.add_argument("--cases", type=Path, default=Path(__file__).parent / "parity_cases.txt")
+    p.add_argument("--cases", type=Path, default=Path(__file__).parent / "full_cases.txt")
+    p.add_argument("--same-cases", type=Path, nargs="+", default=[],
+                   help="case list files with the same rows as --cases in another order (comments, blank lines and spacing may differ); "
+                        "an original run recorded with one of them counts as a run of --cases")
     p.add_argument("--level", default="high")
     p.add_argument("--json", type=Path, help="write the full summary here")
     p.add_argument("--export-dir", type=Path,
@@ -456,6 +525,14 @@ def main() -> None:
     if not cases or len(cases) != len(listed):
         raise SystemExit(f"{args.cases}: empty case list or duplicate task ids")
     cases_sha = hashlib.sha256(args.cases.read_bytes()).hexdigest()
+    # Reordered copies of the case list: same lines, so a run made with one ran the same cases.
+    allowed_lists = {cases_sha: str(args.cases)}
+    for alt in args.same_cases:
+        if not alt.is_file():
+            raise SystemExit(f"case list not found: {alt}")
+        if _case_rows(alt) != _case_rows(args.cases):
+            raise SystemExit(f"{alt}: not the same cases as {args.cases}")
+        allowed_lists.setdefault(hashlib.sha256(alt.read_bytes()).hexdigest(), str(alt))
     harbor_groups = [[Path(d) for d in group.split(",") if d] for group in args.harbor]
     all_dirs = [d.resolve() for group in harbor_groups for d in group] + [d.resolve() for d in args.original]
     if len(set(all_dirs)) != len(all_dirs):
@@ -473,7 +550,7 @@ def main() -> None:
     if len(orig_runs) != len(harb_runs):
         problems.append(f"unequal run counts (original {len(orig_runs)}, Harbor {len(harb_runs)})")
     for side, runs in (("original", orig_runs), ("harbor", harb_runs)):
-        if any(r["settings"] != runs[0]["settings"] for r in runs):
+        if any(_comparable(r["settings"]) != _comparable(runs[0]["settings"]) for r in runs):
             problems.append(f"{side} runs used different settings: {[r['settings'] for r in runs]}")
         if any(not r["settings"] or not r["shared"] for r in runs):
             problems.append(f"{side}: a run has no complete record of its settings "
@@ -501,8 +578,8 @@ def main() -> None:
     if len(set(ids)) != len(ids):
         problems.append("the same run, job or trial was given more than once (same job id, trial id or run records)")
     for run in orig_runs:
-        if run["cases_sha256"] != cases_sha:
-            problems.append(f"original {run['name']} was run with a different case list file than --cases "
+        if run["cases_sha256"] not in allowed_lists:
+            problems.append(f"original {run['name']} was run with a different case list file than --cases and the --same-cases files "
                             "(the hash covers every byte of the file; a sanity run is not a parity run)")
     for side, runs in (("original", orig_runs), ("harbor", harb_runs)):
         for run in runs:
@@ -534,18 +611,18 @@ def main() -> None:
         problems.append(f"the two sides did not use the same {PROVENANCE}: "
                         f"original {sorted(map(str, side_shared['original']))}, harbor {sorted(map(str, side_shared['harbor']))}")
 
-    o_strict, h_strict = o.pop("strict_exact"), h.pop("strict_exact")
-    o_line, h_line = o.pop("by_line_exact"), h.pop("by_line_exact")
-    comparable = o.pop("all_runs_scored") and h.pop("all_runs_scored") and bool(o_strict) and bool(h_strict)
-    overlap = ({"strict": _overlap(o_strict, h_strict), "by_line": _overlap(o_line, h_line)} if comparable
-               else {"strict": None, "by_line": None})
+    exact = {m: (o.pop(f"{m}_exact"), h.pop(f"{m}_exact")) for m in METRICS}
+    comparable = o.pop("all_runs_scored") and h.pop("all_runs_scored") and bool(exact["strict"][0]) and bool(exact["strict"][1])
+    overlap = {m: (_overlap(*exact[m]) if comparable else None) for m in METRICS}
     complete = not problems
-    match = bool(complete and overlap["strict"] and overlap["by_line"])
+    match = bool(complete and all(overlap[m] for m in METRICS))
     def run_record(side: str, i: int, run: dict, summary: dict) -> dict:
         return {"side": side, "trial": i + 1, "run": run["name"], "settings": run["settings"],
                 "n_cases": len(cases), "n_scored": len(run["scored"]),
                 "strictly_correct_returns_pct": summary["strict_runs"][i],
                 "correct_by_line_pct": summary["by_line_runs"][i],
+                "lenient_correct_returns_pct": summary["lenient_strict_runs"][i],
+                "correct_by_line_lenient_pct": summary["lenient_by_line_runs"][i],
                 "unscored": run["unscored"],
                 "served_models": run["served_models"],
                 "provenance": [dict(zip(PROVENANCE, t)) for t in sorted(run["shared"], key=str)],
@@ -565,6 +642,7 @@ def main() -> None:
             args.json.parent.mkdir(parents=True, exist_ok=True)
             args.json.write_text(json.dumps({
                 "complete": complete, "parity_match": match, "problems": problems, "warnings": warnings,
+                "case_list_files": {r["name"]: allowed_lists.get(r["cases_sha256"]) for r in orig_runs},
                 "overlap": overlap, "n_cases": len(cases), "original": o, "harbor": h,
                 "served_models_harbor": served,
                 "runs": {"original": [run_record("original", i, r, o) for i, r in enumerate(orig_runs)],
@@ -573,16 +651,17 @@ def main() -> None:
     except OSError as exc:
         raise SystemExit(f"cannot write the report ({exc}); no verdict given") from exc
     for name, s, runs in (("original", o, orig_runs), ("harbor", h, harb_runs)):
-        print(f"{name:9s} strict {_fmt(s['strict'])} | by-line {_fmt(s['by_line'])}")
-        print(f"{'':9s} per run: strict {_round(s['strict_runs'])}  by-line {_round(s['by_line_runs'])}  "
-              f"scored {[len(r['scored']) for r in runs]} of {len(cases)}")
-    print(f"range overlap{'' if complete else ' (provisional)'}: strict {overlap['strict']}, by-line {overlap['by_line']}")
+        print(f"{name:9s} " + " | ".join(f"{LABELS[m]} {_fmt(s[m])}" for m in METRICS))
+        print(f"{'':9s} per run: " + "  ".join(f"{LABELS[m]} {_round(s[f'{m}_runs'])}" for m in METRICS)
+              + f"  scored {[len(r['scored']) for r in runs]} of {len(cases)}")
+    print(f"range overlap{'' if complete else ' (provisional)'}: "
+          + ", ".join(f"{LABELS[m]} {overlap[m]}" for m in METRICS))
     if served:
         print("model reported by the API (Harbor side):", ", ".join(served))
     for w in warnings:
         print("warning:", w)
     if match:
-        print("PARITY MATCH: data complete and the run ranges overlap on both metrics")
+        print("PARITY MATCH: data complete and the run ranges overlap on all four metrics")
     elif complete:
         print("NO MATCH: data complete, but the run ranges do not overlap on every metric")
     else:

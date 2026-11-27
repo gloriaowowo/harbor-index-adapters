@@ -2,7 +2,7 @@
   {
     "adapter_name": "taxcalcbench",
     "adapter_builders": [
-      "Gloria Tan (GitHub: gloriaowowo)"
+      "Gloria Tan (gloriayytan2021@gmail.com)"
     ],
     "original_benchmark": [
       {
@@ -20,16 +20,20 @@
       {
         "split": "full",
         "adapted_benchmark_size": 101,
-        "parity_benchmark_size": 20,
-        "parity_sampling_rate": 0.19801980198019803,
-        "registry_benchmark_size": 0,
+        "parity_benchmark_size": 101,
+        "parity_sampling_rate": 1.0,
+        "registry_benchmark_size": 101,
         "added_agents": [
           "taxcalcbench-direct@1.0.0"
         ],
-        "parity_matching_agents": [],
-        "parity_unmatching_agents": [],
-        "parity_costs": null,
-        "notes": "Parity runs pending. All 101 upstream cases are adapted; the parity subset is 20 fixed cases (parity/parity_cases.txt: two TY2025 cases per jurisdiction and ten TY2024 cases, random.Random(42)). Parity plan: taxcalcbench-direct@1.0.0 (a Harbor port of upstream's single Responses API call) with openai/gpt-6-luna at thinking level high, three runs per side, plus one Harbor-only Codex CLI run on the same subset. parity_matching_agents, parity_unmatching_agents and parity_costs are filled after the runs; registry_benchmark_size is set when the dataset (requested ID column-tax/taxcalcbench, tags v1.0 and parity) is published. The expected returns are public, so the agent phase of every task has no network; Harbor allows the model endpoint it resolves for an installed agent."
+        "parity_matching_agents": [
+          "taxcalcbench-direct@1.0.0+openai/gpt-6-luna"
+        ],
+        "parity_unmatching_agents": [
+          "None"
+        ],
+        "parity_costs": "$7",
+        "notes": "All 101 upstream cases are adapted, and parity ran on all of them: taxcalcbench-direct@1.0.0 (a Harbor port of upstream's single Responses API call) with openai/gpt-6-luna at thinking level high, 5 runs per side; the run ranges overlap on all four upstream metrics (details in parity_experiment.json and the README). Standard CLI agent, Harbor side only: Codex CLI 0.171.0 with gpt-6-luna, 35.0% strictly correct returns over 100 of 101 tasks. parity_costs: $2.81 for the original side (upstream's LiteLLM estimate, the 6-case sanity check included), about the same for the Harbor side, and $1.32 for the Codex run. registry_benchmark_size is the 101 tasks the dataset PR registers (requested ID column-tax/taxcalcbench, tag v1.0). The expected returns are public, so the agent phase of every task has no network; Harbor allows the model endpoint it resolves for an installed agent."
       }
     ]
   }

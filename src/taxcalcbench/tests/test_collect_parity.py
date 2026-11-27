@@ -26,16 +26,18 @@ def _load():
     return module
 
 
-def _orig_case(run_dir: Path, task: str, correct: int, total: int, status: str | None = "ok") -> None:
+def _orig_case(run_dir: Path, task: str, correct: int, total: int, status: str | None = "ok", near: int = 0) -> None:
+    """near: how many of the wrong lines are within $5 of the expected amount (lenient-correct)."""
     d = run_dir / task
     d.mkdir(parents=True)
     if status is not None:  # the launcher's own record for the case
         (d / "status").write_text(f"{task}\t1\t0\tyes\tyes\t{status}\n")
     lines = [f"Line {i}: ✓ correct, expected: 1.0, actual: 1.0" for i in range(correct)]
-    lines += [f"Line {i}: ✗ incorrect, expected: 1.0, actual: 2.0" for i in range(correct, total)]
-    pct = 100 * correct / total
-    lines += ["", f"Strictly correct return: {correct == total}", "Lenient correct return: False",
-              f"Correct (by line): {pct:.2f}%", f"Correct (by line, lenient): {pct:.2f}%"]
+    lines += [f"Line {i}: ✗ incorrect, expected: 1.0, actual: {3.0 if i < correct + near else 10.0}"
+              for i in range(correct, total)]
+    pct, lenient = 100 * correct / total, correct + near
+    lines += ["", f"Strictly correct return: {correct == total}", f"Lenient correct return: {lenient == total}",
+              f"Correct (by line): {pct:.2f}%", f"Correct (by line, lenient): {100 * lenient / total:.2f}%"]
     (d / "evaluation_result_high_1.md").write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -49,7 +51,7 @@ _trial_counter = iter(range(1, 10**6))
 
 def _harbor_trial(job_dir: Path, task: str, correct: int, total: int, *, valid=True, exc=None, suffix="a",
                   found=True, meta=META, checksum="same", graded="the reply", trial_id=None, scored=True,
-                  job_id=None) -> None:
+                  job_id=None, near=0) -> None:
     """One trial folder. By default: a delivered, scored reply and a complete request record."""
     d = job_dir / f"{task}__{suffix}"
     d.mkdir(parents=True)
@@ -71,9 +73,13 @@ def _harbor_trial(job_dir: Path, task: str, correct: int, total: int, *, valid=T
         "exception_info": {"exception_type": exc} if exc else None}))
     if scored:
         (d / "verifier").mkdir()
+        lenient = correct + near
         (d / "verifier" / "score.json").write_text(json.dumps({
             "strictly_correct_return": correct == total, "correct_by_line_score": correct / total,
-            "output_found": found, "lines": [{"correct": i < correct} for i in range(total)]}))
+            "lenient_correct_return": lenient == total, "lenient_correct_by_line_score": lenient / total,
+            "output_found": found,
+            "lines": [{"expected": 1.0, "actual": 1.0 if i < correct else 3.0 if i < lenient else 10.0,
+                       "correct": i < correct, "lenient_correct": i < lenient} for i in range(total)]}))
 
 
 def _failed_trial(job_dir: Path, task: str, exc="UnknownApiError", **kwargs) -> None:
@@ -87,8 +93,8 @@ def _setup(tmp_path: Path, orig: list[dict], harbor: list[dict], model="openai/m
     cases_sha = hashlib.sha256(cases_file.read_bytes()).hexdigest()
     for i, run in enumerate(orig, 1):
         run_dir = tmp_path / "orig" / f"run_{i}"
-        for task, (c, t) in run.items():
-            _orig_case(run_dir, task, c, t)
+        for task, (c, t, *near) in run.items():
+            _orig_case(run_dir, task, c, t, near=near[0] if near else 0)
         (run_dir / "run.settings").write_text(
             f"upstream_commit=abc\nmodel={model}\nthinking_level=high\nreasoning_effort=high\napi_base=https://host-a/v1\n"
             f"litellm=1.100.5\nopenai=2.43.0\ncases_sha256={cases_sha}\nlimit=0\n")
@@ -101,8 +107,8 @@ def _setup(tmp_path: Path, orig: list[dict], harbor: list[dict], model="openai/m
         (job / "result.json").write_text(json.dumps({"id": f"job-id-{i}", "started_at": f"2026-01-0{i}T10:00:00"}))
         (job / "config.json").write_text(json.dumps({"agents": [{"import_path": "a:B", "model_name": model,
                                                                  "kwargs": {"thinking_level": "high"}}]}))
-        for task, (c, t) in run.items():
-            _harbor_trial(job, task, c, t)
+        for task, (c, t, *near) in run.items():
+            _harbor_trial(job, task, c, t, near=near[0] if near else 0)
         jobs.append(job)
     return cases_file, jobs
 
@@ -135,7 +141,7 @@ def test_match_with_full_precision(tmp_path):
     proc, report = _run(tmp_path, cases_file, jobs, ["--export-dir", str(tmp_path / "rc")])
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert report["complete"] and report["parity_match"]
-    assert report["overlap"] == {"strict": True, "by_line": True}
+    assert report["overlap"] == {"strict": True, "by_line": True, "lenient_strict": True, "lenient_by_line": True}
     # By-line of FULL is (100 + 33.33.. + 100) / 3: computed from marks, not the rounded "33.33%".
     assert report["original"]["by_line_runs"][0] == pytest.approx(700 / 9)
     assert report["original"]["strict_runs"] == pytest.approx([200 / 3, 200 / 3])
@@ -340,7 +346,7 @@ def test_equal_scores_in_another_order_still_overlap(tmp_path):
     cases_file, jobs = _setup(tmp_path, [UP, UP], [DOWN, DOWN])
     proc, report = _run(tmp_path, cases_file, jobs)
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert report["overlap"] == {"strict": True, "by_line": True}
+    assert report["overlap"] == {"strict": True, "by_line": True, "lenient_strict": True, "lenient_by_line": True}
 
 
 def test_a_shorter_case_list_cannot_turn_into_a_match(tmp_path):
@@ -527,7 +533,7 @@ def test_a_run_without_any_score_still_gets_a_report(tmp_path):
         _failed_trial(jobs[1], task)
     proc, report = _run(tmp_path, cases_file, jobs)
     assert proc.returncode == 1 and report is not None
-    assert report["harbor"]["strict_runs"][1] is None and report["overlap"] == {"strict": None, "by_line": None}
+    assert report["harbor"]["strict_runs"][1] is None and report["overlap"] == {"strict": None, "by_line": None, "lenient_strict": None, "lenient_by_line": None}
     assert any("no scored case" in p for p in report["problems"])
 
 
@@ -636,14 +642,14 @@ def test_by_line_is_the_mean_of_per_case_shares(tmp_path):
     assert report["original"]["strict_runs"] == pytest.approx([100 / 3, 100 / 3])
 
 
-def test_both_metrics_must_overlap(tmp_path):
+def test_every_metric_must_overlap(tmp_path):
     # Strict score equal on both sides (1 of 3), by-line far apart.
     low = {"t1": (3, 3), "t2": (0, 3), "t3": (0, 3)}
     high = {"t1": (3, 3), "t2": (2, 3), "t3": (2, 3)}
     cases_file, jobs = _setup(tmp_path, [low, low], [high, high])
     proc, report = _run(tmp_path, cases_file, jobs)
     assert proc.returncode == 3
-    assert report["overlap"] == {"strict": True, "by_line": False} and report["parity_match"] is False
+    assert report["overlap"] == {"strict": True, "by_line": False, "lenient_strict": True, "lenient_by_line": False} and report["parity_match"] is False
 
 
 def test_unequal_run_counts_are_incomplete(tmp_path):
@@ -715,7 +721,7 @@ def test_strict_must_overlap_too(tmp_path):
     cases_file, jobs = _setup(tmp_path, [one_strict, one_strict], [THIRD, THIRD])
     proc, report = _run(tmp_path, cases_file, jobs)
     assert proc.returncode == 3, proc.stdout + proc.stderr
-    assert report["overlap"] == {"strict": False, "by_line": True} and report["parity_match"] is False
+    assert report["overlap"] == {"strict": False, "by_line": True, "lenient_strict": False, "lenient_by_line": True} and report["parity_match"] is False
 
 
 def test_a_trial_that_names_no_job_is_incomplete(tmp_path):
@@ -951,3 +957,150 @@ def test_a_run_with_one_job_folder_needs_no_start_time(tmp_path):
         (job / "result.json").write_text(json.dumps({"id": f"job-id-{i}"}))  # no started_at
     proc, report = _run(tmp_path, cases_file, jobs)
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_lenient_metrics_are_read_from_the_amounts_and_compared(tmp_path):
+    # Same strict and by-line results on both sides, but the original side's wrong lines are within $5
+    # (lenient-correct) and Harbor's are not: the lenient metrics differ, so there is no match.
+    near = {"t1": (3, 3), "t2": (1, 3, 2), "t3": (0, 3, 3)}
+    far = {"t1": (3, 3), "t2": (1, 3), "t3": (0, 3)}
+    cases_file, jobs = _setup(tmp_path, [near, near], [far, far])
+    proc, report = _run(tmp_path, cases_file, jobs)
+    assert proc.returncode == 3, proc.stdout + proc.stderr
+    assert report["overlap"] == {"strict": True, "by_line": True, "lenient_strict": False, "lenient_by_line": False}
+    assert report["original"]["lenient_strict_runs"] == pytest.approx([100.0, 100.0])
+    assert report["harbor"]["lenient_strict_runs"] == pytest.approx([100 / 3, 100 / 3])
+    assert report["original"]["lenient_by_line_runs"][0] == pytest.approx(100.0)
+    assert report["runs"]["original"][0]["correct_by_line_lenient_pct"] == pytest.approx(100.0)
+    assert "NO MATCH" in proc.stdout
+
+
+def test_a_wrong_lenient_summary_in_upstreams_report_is_rejected(tmp_path):
+    cases_file, jobs = _setup(tmp_path, [FULL, ALT], [FULL, ALT])
+    f = tmp_path / "orig" / "run_1" / "t2" / "evaluation_result_high_1.md"
+    f.write_text(f.read_text().replace("Correct (by line, lenient): 33.33%", "Correct (by line, lenient): 66.67%"))
+    proc, report = _run(tmp_path, cases_file, jobs)
+    assert proc.returncode != 0 and report is None and "lenient" in proc.stderr and "disagree" in proc.stderr
+
+
+@pytest.mark.parametrize("change, message", [
+    (lambda s: {**s, "lenient_correct_return": not s["lenient_correct_return"]}, "disagree with lenient_correct_return"),
+    (lambda s: {**s, "lines": [{**s["lines"][0], "lenient_correct": False}] + s["lines"][1:]}, "marked not lenient-correct"),
+    (lambda s: {**s, "lines": [{k: v for k, v in x.items() if k != "lenient_correct"} for x in s["lines"]]},
+     "lenient results are not true/false"),
+    (lambda s: {k: v for k, v in s.items() if k != "lenient_correct_return"}, "lenient_correct_return is not true/false"),
+    (lambda s: {**s, "lenient_correct_return": "true"}, "lenient_correct_return is not true/false"),
+    (lambda s: {**s, "lines": [{**s["lines"][0], "actual": 50.0}] + s["lines"][1:]}, "disagree with the line's own amounts"),
+    (lambda s: {**s, "lines": [{k: v for k, v in x.items() if k != "expected"} for x in s["lines"]]}, "no numeric expected/actual"),
+    (lambda s: {**s, "lenient_correct_by_line_score": 0.99}, "lenient_correct_by_line_score disagrees"),
+    (lambda s: {**s, "correct_by_line_score": 0.5}, "correct_by_line_score disagrees"),
+])
+def test_inconsistent_lenient_results_on_the_harbor_side_are_rejected(tmp_path, change, message):
+    cases_file, jobs = _setup(tmp_path, [FULL, ALT], [FULL, ALT])
+    score = jobs[0] / "t1__a" / "verifier" / "score.json"
+    score.write_text(json.dumps(change(json.loads(score.read_text()))))
+    proc, report = _run(tmp_path, cases_file, jobs)
+    assert proc.returncode != 0 and report is None and message in proc.stderr
+
+
+def test_the_lenient_rule_follows_upstreams_five_dollar_boundary(tmp_path):
+    # Every line wrong; which of them are within $5 decides the lenient counts (upstream: abs(a - e) <= 5).
+    cases_file, jobs = _setup(tmp_path, [FULL, ALT], [FULL, ALT])
+    def report_file(task, pairs):
+        lenient = sum(1 for e, a in pairs if abs(float(a) - float(e)) <= 5)
+        lines = [f"Line {i}: ✗ incorrect, expected: {e}, actual: {a}" for i, (e, a) in enumerate(pairs)]
+        lines += ["", "Strictly correct return: False", f"Lenient correct return: {lenient == len(pairs)}",
+                  "Correct (by line): 0.00%", f"Correct (by line, lenient): {100 * lenient / len(pairs):.2f}%"]
+        (tmp_path / "orig" / "run_1" / task / "evaluation_result_high_1.md").write_text("\n".join(lines), encoding="utf-8")
+        return lenient
+    # exactly $5 counts, a hair over does not, negatives work
+    assert report_file("t1", [("100.0", "105.0"), ("100.0", "105.00000000000001"), ("-100.0", "-95.0")]) == 2
+    # exponent forms and a huge gap
+    assert report_file("t2", [("1e+16", "1.0000000000000004e+16"), ("-1e+300", "1e+300"), ("1.5e-07", "3.0")]) == 2
+    proc, report = _run(tmp_path, cases_file, jobs)
+    assert report is not None, proc.stdout + proc.stderr
+    per_task = report["runs"]["original"][0]["per_task"]
+    assert per_task["t1"]["lenient"] == 2 and per_task["t1"]["correct"] == 0
+    assert per_task["t2"]["lenient"] == 2 and not per_task["t2"]["lenient_strict"]
+
+
+def test_text_after_upstreams_summary_is_not_counted(tmp_path):
+    cases_file, jobs = _setup(tmp_path, [FULL, ALT], [FULL, ALT])
+    f = tmp_path / "orig" / "run_1" / "t1" / "evaluation_result_high_1.md"
+    f.write_text(f.read_text() + "\nquery: Line 9: ✓ correct, expected: 1.0, actual: 1.0\n", encoding="utf-8")
+    proc, report = _run(tmp_path, cases_file, jobs)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert report["runs"]["original"][0]["per_task"]["t1"]["total"] == 3
+
+
+def test_lenient_marks_that_contradict_the_amounts_are_rejected(tmp_path):
+    cases_file, jobs = _setup(tmp_path, [FULL, ALT], [FULL, ALT])
+    score = jobs[0] / "t2__a" / "verifier" / "score.json"  # FULL: t2 has one correct line and two $9-off lines
+    s = json.loads(score.read_text())
+    score.write_text(json.dumps({**s, "lines": [{**x, "lenient_correct": True} for x in s["lines"]]}))
+    proc, report = _run(tmp_path, cases_file, jobs)
+    assert proc.returncode != 0 and report is None and "disagree with the line's own amounts" in proc.stderr
+
+
+def _reordered_run(tmp_path: Path, cases_file: Path, run: str = "run_2") -> Path:
+    """Record one original run as made with a reordered copy of the case list (same lines, other order)."""
+    lines = [l for l in cases_file.read_text().splitlines() if l and not l.startswith("#")]
+    other = tmp_path / "cases_reordered.txt"
+    other.write_text("# same cases, another order\n" + "\n".join(reversed(lines)) + "\n")
+    settings = tmp_path / "orig" / run / "run.settings"
+    old = settings.read_text().split("cases_sha256=")[1].split("\n")[0]
+    settings.write_text(settings.read_text().replace(old, hashlib.sha256(other.read_bytes()).hexdigest()))
+    return other
+
+
+def test_a_reordered_case_list_counts_only_when_named(tmp_path):
+    cases_file, jobs = _setup(tmp_path, [FULL, FULL], [FULL, FULL])
+    other = _reordered_run(tmp_path, cases_file)
+    proc, report = _run(tmp_path, cases_file, jobs)
+    assert proc.returncode == 1 and not report["parity_match"]
+    assert any("different case list" in p for p in report["problems"])
+    assert not any("different settings" in p for p in report["problems"])
+    proc, report = _run(tmp_path, cases_file, jobs, ["--same-cases", str(other)])
+    assert proc.returncode == 0 and report["parity_match"], proc.stdout + proc.stderr
+    assert report["case_list_files"]["run_2"] == str(other) and report["case_list_files"]["run_1"] == str(cases_file)
+
+
+@pytest.mark.parametrize("rows", [
+    "t1 ty24 t1\nt2 ty24 t2\n",                              # a row missing
+    "t3 ty24 t3\nt2 ty25 t2\nt1 ty24 t1\n",                 # a column changed
+    "t3 ty24 t3\nt2 ty24 t2\nt1 ty24 t1\nt1 ty24 t1\n",    # a row duplicated
+    "t3 ty24 t3\nt2 ty24 t2\nt1 ty24 t1\nt4 ty24 t4\n",    # a row added
+])
+def test_a_same_cases_file_with_other_cases_is_rejected(tmp_path, rows):
+    cases_file, jobs = _setup(tmp_path, [FULL, FULL], [FULL, FULL])
+    _reordered_run(tmp_path, cases_file)
+    wrong = tmp_path / "wrong.txt"
+    wrong.write_text(rows)
+    proc, report = _run(tmp_path, cases_file, jobs, ["--same-cases", str(wrong)])
+    assert proc.returncode == 1 and report is None
+    assert "not the same cases" in proc.stdout + proc.stderr
+
+
+def test_a_run_with_an_unnamed_reordering_is_still_rejected(tmp_path):
+    cases_file, jobs = _setup(tmp_path, [FULL, FULL], [FULL, FULL])
+    named = _reordered_run(tmp_path, cases_file, run="run_2")
+    lines = [l for l in cases_file.read_text().splitlines() if l and not l.startswith("#")]
+    third = tmp_path / "third.txt"
+    third.write_text("# another order\n" + "\n".join(lines[1:] + lines[:1]) + "\n")
+    settings = tmp_path / "orig" / "run_1" / "run.settings"
+    old = settings.read_text().split("cases_sha256=")[1].split("\n")[0]
+    settings.write_text(settings.read_text().replace(old, hashlib.sha256(third.read_bytes()).hexdigest()))
+    proc, report = _run(tmp_path, cases_file, jobs, ["--same-cases", str(named)])
+    assert proc.returncode == 1 and not report["parity_match"]
+    assert any("run_1" in p and "different case list" in p for p in report["problems"])
+    assert not any("different settings" in p for p in report["problems"])
+
+
+def test_a_strict_miss_alone_is_no_match(tmp_path):
+    # Same by-line and lenient results on both sides, but the strict ranges do not touch.
+    orig = {"t1": (3, 3), "t2": (1, 3, 1), "t3": (3, 3)}
+    harb = {"t1": (2, 3, 1), "t2": (2, 3), "t3": (3, 3)}
+    cases_file, jobs = _setup(tmp_path, [orig, orig], [harb, harb])
+    proc, report = _run(tmp_path, cases_file, jobs)
+    assert report["overlap"] == {"strict": False, "by_line": True, "lenient_strict": True, "lenient_by_line": True}
+    assert proc.returncode == 3 and not report["parity_match"], proc.stdout + proc.stderr

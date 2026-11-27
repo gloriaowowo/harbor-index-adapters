@@ -49,9 +49,8 @@ def _parse_args() -> argparse.Namespace:
                    help="Skip the check that --taxcalcbench-root is the pinned commit with no local changes.")
     p.add_argument("--tax-year", choices=[*TAX_YEARS, "all"], default="all",
                    help="ty25 (50 PDF cases), ty24 (51 JSON cases) or all (default).")
-    p.add_argument("--split", choices=["full", "parity", "sanity"], default="full",
-                   help="full (default); parity: the fixed 20-case parity subset; "
-                        "sanity: six of those cases for the pre-run check.")
+    p.add_argument("--split", choices=["full", "sanity"], default="full",
+                   help="full (default); sanity: six fixed cases for the pre-run check.")
     p.add_argument("--task-ids", nargs="+", default=None,
                    help="Task ids (e.g. ty25-ca-001) or upstream case names.")
     p.add_argument("--limit", type=_non_negative, default=None, help="Generate only the first N tasks.")

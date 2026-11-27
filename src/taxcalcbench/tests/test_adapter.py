@@ -128,21 +128,25 @@ def _case_list(name: str) -> list[tuple[str, ...]]:
             if line.strip() and not line.startswith("#")]
 
 
-def test_parity_subset_is_fixed_whatever_the_year_filter(tmp_path):
+def test_case_lists_match_the_adapter_whatever_the_year_filter(tmp_path):
     def rows(split, years):
         return [(c.task_id, c.tax_year, c.source_id)
                 for c in TaxCalcBenchAdapter(output_dir=tmp_path, benchmark_root=Path(ROOT),
                                              split=split, tax_years=years).discover()]
 
     # The shipped case lists (read by both parity sides) equal the adapter's selection, all three columns.
-    manifest = _case_list("parity_cases.txt")
-    assert len(manifest) == 20
-    assert rows("parity", ("ty25", "ty24")) == manifest
-    assert rows("parity", ("ty24",)) == [r for r in manifest if r[1] == "ty24"]
-    assert rows("parity", ("ty25",)) == [r for r in manifest if r[1] == "ty25"]
+    full = _case_list("full_cases.txt")
+    assert len(full) == 101 and rows("full", ("ty25", "ty24")) == full
     sanity = _case_list("sanity_cases.txt")
-    assert len(sanity) == 6 and set(sanity) <= set(manifest)
+    assert len(sanity) == 6 and set(sanity) <= set(full)
     assert rows("sanity", ("ty25", "ty24")) == sanity
+    assert rows("sanity", ("ty24",)) == [r for r in sanity if r[1] == "ty24"]
+    assert rows("sanity", ("ty25",)) == [r for r in sanity if r[1] == "ty25"]
+    with pytest.raises(ValueError):
+        TaxCalcBenchAdapter(output_dir=tmp_path, benchmark_root=Path(ROOT), split="parity")
+    # The original side's runs 4-5 used the same lines in the Harbor side's (byte-sorted task id) order.
+    reordered = _case_list("full_cases_harbor_order.txt")
+    assert sorted(reordered) == sorted(full) and reordered == sorted(full, key=lambda r: r[0].encode())
 
 
 def test_failed_generation_leaves_no_partial_task_and_keeps_the_old_one(tmp_path, monkeypatch):

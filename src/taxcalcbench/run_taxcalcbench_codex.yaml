@@ -1,12 +1,14 @@
-# Standard CLI agent on the parity subset (adapted side only; the parity
+# Standard CLI agent on all 101 tasks, on Daytona (adapted side only; the parity
 # comparison uses taxcalcbench-direct). Shows that an agent working inside the container can read
 # /app/input and write /app/output/return.txt.
 #
-#   (from src/taxcalcbench)  uv run taxcalcbench --split parity --output-dir ../../datasets/taxcalcbench-parity
+#   (from src/taxcalcbench)  uv run taxcalcbench --output-dir ../../datasets/taxcalcbench-full
 #   (from the repository root)
 #   export OPENAI_API_KEY=...
 #   export OPENAI_BASE_URL=...
-#   harbor run -c src/taxcalcbench/run_taxcalcbench_codex.yaml --job-name codex-run1
+#   export DAYTONA_API_KEY=...
+#   uv run --project src/taxcalcbench --extra parity harbor run \
+#     -c src/taxcalcbench/run_taxcalcbench_codex.yaml --job-name codex-full-run1
 #
 # The tasks give the agent phase no network. The harness allows the model
 # endpoint it resolves for the agent (here the host of OPENAI_BASE_URL), so
@@ -17,7 +19,7 @@ jobs_dir: jobs
 n_attempts: 1
 n_concurrent_trials: 4
 environment:
-  type: docker
+  type: daytona
   delete: true
 agents:
   - name: codex
@@ -27,4 +29,4 @@ agents:
       reasoning_effort: high
       web_search: disabled
 datasets:
-  - path: datasets/taxcalcbench-parity
+  - path: datasets/taxcalcbench-full
